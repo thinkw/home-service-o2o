@@ -136,9 +136,35 @@ cd project-xzb-pc-admin-vue3-java && npm run dev
 
 ## AI助手 🚧开发中
 
-AI 对话功能采用两层架构：
-- **jzo2o-ai**（Java）：负责 Token 鉴权、敏感词过滤、业务数据预取、对话记录持久化、流量整形
-- **jzo2o-ai-engine**（Python）：负责大模型推理，纯文本流式协议（SSE），不涉及 Prompt 逻辑以外的业务
+AI 对话功能采用两层架构，支持 HTTP SSE 和 WebSocket 两种传输模式：
+
+### jzo2o-ai（Java 中间层）
+- **职责**：Token 鉴权、会话管理、对话记录持久化、SSE/WS 代理
+- **接口**：聊天（流式响应）、会话列表查询、消息历史查询、会话取消
+- **传输模式**：配置切换 `ai.engine.mode=http|ws`
+
+### jzo2o-ai-engine（Python 推理层）
+- **架构**：基于 LangChain 的 Agent 框架
+- **LLM 支持**：OpenAI 兼容 API（配置 `LLM_API_BASE`、`LLM_API_KEY`、`LLM_MODEL`）
+- **本地工具**：`calculate`（数学计算）、`get_current_time`（当前时间）、`search_web`（Tavily 联网搜索）
+- **远程工具**：`customer_order_query`（订单查询）、`query_evaluations`（评价查询）、`get_evaluation_summary`（评价总结）
+- **状态持久化**：SQLite Checkpoint（对话状态跨进程恢复）
+- **接口**：`/chat/stream`（HTTP SSE）、`/ws/chat`（WebSocket）
+
+### 远程工具执行流程
+```
+Python Agent 判断需调用远程工具 → 通过 WebSocket 通知 Java 层
+→ Java 执行 ToolExecutor 查询业务数据 → 结果通过 WS 返回 Python
+→ Python 拼接至 Prompt 继续对话
+```
+
+### 环境变量（jzo2o-ai-engine/.env）
+```bash
+LLM_API_BASE=https://api.openai.com/v1
+LLM_API_KEY=your-api-key
+LLM_MODEL=gpt-4o-mini
+TAVILY_API_KEY=your-tavily-key  # 可选，联网搜索用
+```
 
 ## 术语约定
 
