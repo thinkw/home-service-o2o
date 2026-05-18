@@ -1,5 +1,4 @@
 import Layout from '@/layouts/index.vue'
-import { ChatIcon } from 'tdesign-icons-vue-next'
 
 const chatRouter = [
   {
@@ -9,7 +8,9 @@ const chatRouter = [
     redirect: '/ai-chat/index',
     meta: {
       title: 'AI 助手',
-      icon: ChatIcon,
+      icon: {
+        render: () => '🤖'
+      },
       single: true,
     },
     children: [
