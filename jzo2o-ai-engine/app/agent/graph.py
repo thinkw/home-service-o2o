@@ -44,6 +44,18 @@ async def get_checkpointer() -> AsyncSqliteSaver | InMemorySaver:
         return InMemorySaver()
 
 
+async def shutdown_checkpointer():
+    """关闭持久化 checkpointer 的连接, 确保进程能正常退出"""
+    global _checkpointer
+    if _checkpointer is not None and hasattr(_checkpointer, 'conn'):
+        try:
+            await _checkpointer.conn.close()
+            logger.info("检查点数据库连接已关闭")
+        except Exception as e:
+            logger.warning("关闭检查点连接时出错: %s", e)
+    _checkpointer = None
+
+
 def build_graph(tool_ctx: ToolExecutionContext,
                 checkpointer=None):
     """构建并返回已编译的 Agent StateGraph

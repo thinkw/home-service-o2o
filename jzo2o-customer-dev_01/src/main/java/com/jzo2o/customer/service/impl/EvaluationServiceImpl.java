@@ -554,6 +554,17 @@ public class EvaluationServiceImpl implements EvaluationService {
         );
     }
 
+    @Override
+    public List<Evaluation> searchByName(Integer targetTypeId, String name) {
+        return evaluationMapper.selectList(
+                Wrappers.<Evaluation>lambdaQuery()
+                        .like(Evaluation::getTargetName, name)
+                        .eq(Evaluation::getStatus, 0)
+                        .orderByDesc(Evaluation::getCreateTime)
+                        .last("LIMIT 10")
+        );
+    }
+
     /**
      * 自动评价（默认5分好评）
      */

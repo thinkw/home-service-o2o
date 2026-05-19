@@ -110,6 +110,10 @@ public class AiEngineWebSocketClient {
             this.sessionId = sessionId;
             this.messages = messages;
         }
+
+        // 当前用户信息 (ChatServiceImpl 注入, 供远程工具查询)
+        volatile Long userId;
+        volatile Integer userType;
     }
 
     // ==================== 初始化 & 清理 ====================
@@ -146,10 +150,13 @@ public class AiEngineWebSocketClient {
                                  List<Map<String, String>> messages,
                                  SseEmitter emitter,
                                  Consumer<String> tokenAccumulator,
-                                 Runnable onCompleteCallback) {
+                                 Runnable onCompleteCallback,
+                                 Long userId, Integer userType) {
         cancelExistingSession(sessionId);
 
         SessionContext ctx = new SessionContext(sessionId, messages);
+        ctx.userId = userId;
+        ctx.userType = userType;
         ctx.emitter = emitter;
         ctx.tokenAccumulator = tokenAccumulator;
         ctx.onCompleteCallback = onCompleteCallback;
@@ -589,7 +596,12 @@ public class AiEngineWebSocketClient {
         @SuppressWarnings("unchecked")
         Map<String, Object> args = (Map<String, Object>) frame.getOrDefault("args", Map.of());
 
-        CompletableFuture.supplyAsync(() -> toolExecutor.execute(toolName, toolCallId, args))
+        // 从会话上下文提取用户信息, 供需要当前用户身份的工具使用
+        SessionContext ctx = sessions.get(sessionId);
+        Long userId = ctx != null ? ctx.userId : null;
+        Integer userType = ctx != null ? ctx.userType : null;
+
+        CompletableFuture.supplyAsync(() -> toolExecutor.execute(toolName, toolCallId, args, userId, userType))
                 .thenAccept(result -> sendToolResult(sessionId, toolCallId, result))
                 .exceptionally(e -> {
                     log.error("远程工具执行失败, sessionId={}, toolName={}: {}",

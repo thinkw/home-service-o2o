@@ -1,8 +1,10 @@
 package com.jzo2o.orders.manager.controller.inner;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.json.JSONUtil;
 import com.jzo2o.api.orders.OrdersApi;
 import com.jzo2o.api.orders.dto.response.OrderResDTO;
+import com.jzo2o.api.orders.dto.response.OrderSimpleResDTO;
 import com.jzo2o.orders.base.model.domain.Orders;
 import com.jzo2o.orders.manager.service.IOrdersManagerService;
 import io.swagger.annotations.Api;
@@ -56,5 +58,18 @@ public class InnerOrdersController implements OrdersApi {
     })
     public void evaluate(@PathVariable("id") Long id) {
         ordersManagerService.evaluationOrder(id);
+    }
+
+    @Override
+    @GetMapping("/queryByUserId")
+    @ApiOperation("根据用户ID查询最近订单")
+    @ApiImplicitParam(name = "userId", value = "用户ID", required = true, dataTypeClass = Long.class)
+    public String queryByUserId(@RequestParam("userId") Long userId) {
+        List<OrderSimpleResDTO> orders = ordersManagerService.consumerQueryList(userId, null, null);
+        // consumerQueryList 可能返回大量数据, 只保留最近 5 条
+        if (orders.size() > 5) {
+            orders = orders.subList(0, 5);
+        }
+        return JSONUtil.toJsonStr(orders);
     }
 }

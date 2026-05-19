@@ -38,7 +38,8 @@ public class ToolExecutor {
      * @param args       工具参数
      * @return 工具执行结果, JSON 字符串. 出错时返回 {"error": "..."}
      */
-    public String execute(String toolName, String toolCallId, Map<String, Object> args) {
+    public String execute(String toolName, String toolCallId, Map<String, Object> args,
+                          Long userId, Integer userType) {
         log.info("执行远程工具: {} (id={}), args={}", toolName, toolCallId, args);
 
         switch (toolName) {
@@ -95,6 +96,39 @@ public class ToolExecutor {
                 try {
                     String result = evaluationApi.queryByTargetIdAndTime(targetTypeId, targetId, afterTime);
                     return result != null ? result : toError("查询评价返回为空");
+                } catch (Exception e) {
+                    return toError("查询评价失败: " + e.getMessage());
+                }
+            }
+            case "query_my_orders": {
+                // 查询当前用户的最近订单 (无需参数)
+                if (userId == null) {
+                    return toError("无法获取当前用户信息");
+                }
+                try {
+                    String ordersJson = ordersApi.queryByUserId(userId);
+                    if (ordersJson == null || ordersJson.isEmpty() || "[]".equals(ordersJson)) {
+                        return safeToJson("暂无最近订单记录");
+                    }
+                    return ordersJson;
+                } catch (Exception e) {
+                    return toError("查询订单失败: " + e.getMessage());
+                }
+            }
+            case "query_evaluations_by_name": {
+                // 按名称模糊搜索评价 (用户说"查看XX的评价"), 不限定 targetType
+                String targetName = args.get("target_name") instanceof String
+                        ? (String) args.get("target_name")
+                        : null;
+                if (targetName == null || targetName.isEmpty()) {
+                    return toError("请提供要查询的目标名称");
+                }
+                try {
+                    String result = evaluationApi.searchByName(null, targetName);
+                    if (result == null || result.isEmpty() || "[]".equals(result)) {
+                        return "未找到匹配 \"" + targetName + "\" 的评价";
+                    }
+                    return result;
                 } catch (Exception e) {
                     return toError("查询评价失败: " + e.getMessage());
                 }

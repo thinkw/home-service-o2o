@@ -44,4 +44,13 @@ public interface OrdersApi {
      */
     @PutMapping("evaluate/{id}")
     void evaluate(@PathVariable("id") Long id);
+
+    /**
+     * 根据用户ID查询最近订单列表
+     *
+     * @param userId 用户ID
+     * @return 最近订单列表 JSON 字符串
+     */
+    @GetMapping("/queryByUserId")
+    String queryByUserId(@RequestParam("userId") Long userId);
 }

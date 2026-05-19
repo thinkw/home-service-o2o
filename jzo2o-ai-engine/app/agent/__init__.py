@@ -2,7 +2,7 @@
 from .state import AgentState
 from .tools import ALL_TOOLS, LOCAL_TOOLS, REMOTE_TOOLS, REMOTE_TOOL_NAMES
 from .tool_context import ToolExecutionContext
-from .graph import build_graph, get_checkpointer
+from .graph import build_graph, get_checkpointer, shutdown_checkpointer
 
 __all__ = [
     "AgentState",
@@ -13,4 +13,5 @@ __all__ = [
     "ToolExecutionContext",
     "build_graph",
     "get_checkpointer",
+    "shutdown_checkpointer",
 ]

@@ -52,4 +52,14 @@ public class InnerEvaluationController implements EvaluationApi {
                 evaluationService.queryByTargetIdAndTime(targetTypeId, targetId, after);
         return cn.hutool.json.JSONUtil.toJsonStr(list);
     }
+
+    @Override
+    @GetMapping("/searchByName")
+    @ApiOperation("按目标名称模糊搜索评价")
+    public String searchByName(@RequestParam(value = "targetTypeId", required = false) Integer targetTypeId,
+                                @RequestParam("name") String name) {
+        java.util.List<com.jzo2o.customer.model.domain.Evaluation> list =
+                evaluationService.searchByName(targetTypeId, name);
+        return cn.hutool.json.JSONUtil.toJsonStr(list);
+    }
 }

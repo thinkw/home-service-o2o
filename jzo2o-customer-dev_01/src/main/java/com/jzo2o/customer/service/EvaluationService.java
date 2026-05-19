@@ -109,4 +109,13 @@ public interface EvaluationService {
      * @return 评价列表
      */
     List<Evaluation> queryByTargetIdAndTime(Integer targetTypeId, Long targetId, LocalDateTime afterTime);
+
+    /**
+     * 按目标名称模糊搜索评价
+     *
+     * @param targetTypeId 评价目标类型 (可选)
+     * @param name         目标名称关键词
+     * @return 匹配的评价列表 (最多 10 条)
+     */
+    List<Evaluation> searchByName(Integer targetTypeId, String name);
 }

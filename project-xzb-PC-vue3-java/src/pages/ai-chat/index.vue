@@ -164,14 +164,50 @@ const serviceConfig: ChatServiceConfig = {
     }
   },
 
-  /** 解析我们后端的自定义 SSE 格式：每行纯文本 */
+  /** 解析 SSE 流：token 文本 → markdown，工具事件 → toolcall */
   onMessage(chunk: SSEChunkData) {
     const data = chunk.data
-    if (!data || data === '[DONE]' || (typeof data === 'string' && data.startsWith('[ERROR]'))) {
+    const event = chunk.event  // SSE 事件名: "tool_start" / "tool_end"
+
+    // 1. 过滤空数据 / 结束标记
+    if (!data || data === '[DONE]') {
       return null
     }
-    // 后端每行返回纯文本 → 作为 markdown 内容追加
-    return { type: 'markdown' as const, data: (data as string) + '\n' }
+
+    // 2. 处理工具调用事件 — 使用 TDesign 原生 toolcall 类型
+    if (event === 'tool_start' || event === 'tool_end') {
+      try {
+        // data 可能是字符串或已解析的对象
+        const parsed = typeof data === 'string' ? JSON.parse(data) : data
+        return {
+          type: 'toolcall',
+          data: {
+            toolCallId: parsed.tool_call_id || '',
+            toolCallName: parsed.tool_name || '',
+            eventType: event === 'tool_start' ? 'start' : 'result',
+            args: typeof parsed.args === 'string'
+              ? parsed.args
+              : JSON.stringify(parsed.args || {}),
+            result: event === 'tool_end' ? (parsed.result || '') : undefined,
+          },
+        }
+      } catch (e) {
+        console.warn('[Chat] 解析工具事件失败:', e, data)
+        return null
+      }
+    }
+
+    // 3. 确保只处理字符串类型的 token
+    if (typeof data !== 'string') {
+      console.debug('[Chat] 跳过非文本数据:', data)
+      return null
+    }
+    if (data.startsWith('[ERROR]')) {
+      return null
+    }
+
+    // 4. 正常 token 文本 → markdown
+    return { type: 'markdown' as const, data: data + '\n' }
   },
 
   /** 取消时通知 Java 端关闭 WebSocket */

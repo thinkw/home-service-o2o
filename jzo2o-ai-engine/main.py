@@ -3,6 +3,9 @@
 严禁: 直接操作生产DB、执行扣款/改订单状态等业务逻辑
 """
 import warnings
+from contextlib import asynccontextmanager
+
+warnings.filterwarnings("ignore", message=".*urllib3.*")
 try:
     from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
 except ImportError:
@@ -18,10 +21,23 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    logger.info("jzo2o-ai-engine 启动中...")
+    yield
+    # 关闭时清理资源
+    from app.agent import shutdown_checkpointer
+    await shutdown_checkpointer()
+    logger.info("jzo2o-ai-engine 已关闭")
+
+
 app = FastAPI(
     title="jzo2o-ai-engine",
     description="云岚到家 AI 引擎 — Prompt编排 + LLM适配",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # 注册路由

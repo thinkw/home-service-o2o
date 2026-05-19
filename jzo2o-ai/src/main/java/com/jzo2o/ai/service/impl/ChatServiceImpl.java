@@ -83,7 +83,7 @@ public class ChatServiceImpl implements ChatService {
                             saveRecord(userId, userType, sessionId, AiConstants.ROLE_ASSISTANT, fullResponse);
                         }
                         log.info("聊天会话完成(WS), sessionId: {}", sessionId);
-                    });
+                    }, userId, userType);
         } else {
             // HTTP 传输 (原有逻辑)
             // WebClient 的 bodyToFlux 使用行解码器, 每个 Flux 元素是原始响应的
