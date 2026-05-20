@@ -14,6 +14,10 @@ class Settings:
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
     llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
+    # DashScope (通义百炼) 嵌入模型
+    dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
+
     # Tavily 联网搜索
     tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
 

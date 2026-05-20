@@ -5,3 +5,5 @@ python-dotenv==1.0.1
 nacos-sdk-python==2.0.6
 tavily-python==0.7.9
 langgraph-checkpoint-sqlite>=3.1.0
+pymilvus>=2.5.0
+dashscope>=1.20.0

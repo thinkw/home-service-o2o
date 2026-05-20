@@ -20,4 +20,17 @@ import javax.annotation.Resource;
 @Api(tags = "机构端-服务单相关接口")
 @RequestMapping("/agency")
 public class AgencyOrdersServeController {
+
+    @Resource
+    private IOrdersServeManagerService ordersServeManagerService;
+
+    @GetMapping("/queryForPage")
+    @ApiOperation("机构端分页查询服务单列表")
+    public PageResult<OrdersServeResDTO> queryForPage(@Validated OrdersServePageQueryReqDTO ordersServePageQueryReqDTO) {
+        return ordersServeManagerService.queryForPage(
+                UserContext.currentUserId(),
+                3,
+                ordersServePageQueryReqDTO
+        );
+    }
 }

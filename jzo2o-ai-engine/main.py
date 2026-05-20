@@ -16,6 +16,7 @@ import uvicorn
 from fastapi import FastAPI
 from app.api.chat import router as chat_router
 from app.api.ws_chat import router as ws_chat_router
+from app.api.knowledge import router as knowledge_router
 from app.core.config import settings
 from app.utils.logger import get_logger
 
@@ -43,6 +44,7 @@ app = FastAPI(
 # 注册路由
 app.include_router(chat_router, prefix="/chat", tags=["聊天"])
 app.include_router(ws_chat_router, tags=["WebSocket"])
+app.include_router(knowledge_router, tags=["知识库"])
 
 
 @app.get("/health")

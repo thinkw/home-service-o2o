@@ -1,0 +1,54 @@
+/* 知识库管理页面样式 */
+@import '../../pages/order/index.less';
+
+.btn-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  :deep(.t-input) {
+    width: 320px;
+  }
+}
+
+.file-type-hint {
+  color: var(--td-gray-color-5);
+  font-size: 12px;
+}
+
+.chunk-count {
+  color: var(--td-brand-color);
+  font-weight: 500;
+}
+
+.search-results-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  padding: 12px;
+  border-bottom: 1px solid var(--td-border-level-1-color);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.search-result-source {
+  font-size: 12px;
+  color: var(--td-gray-color-5);
+  margin-bottom: 8px;
+}
+
+.search-result-content {
+  color: var(--td-text-color-primary);
+  line-height: 1.6;
+}

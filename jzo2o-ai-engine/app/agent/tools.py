@@ -109,11 +109,28 @@ async def query_evaluations_by_name(target_name: str) -> str:
     raise NotImplementedError("Remote tool executed via Java WebSocket")
 
 
+@tool
+async def search_knowledge(query: str) -> str:
+    """搜索平台知识库。当用户询问平台规则、流程说明、退款政策、服务标准等问题时使用。query 为搜索关键词或问题。返回相关文档内容。"""
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from app.rag import search_knowledge as do_search
+        results = do_search(query, top_k=3)
+        if not results:
+            return "未找到相关知识库内容"
+        return json.dumps(results, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error("知识库搜索失败: %s", e)
+        return f"知识库搜索失败: {e}"
+
+
 # =============================================================================
 # 工具注册表
 # =============================================================================
 
-LOCAL_TOOLS: list = [calculate, get_current_time, search_web]
+LOCAL_TOOLS: list = [calculate, get_current_time, search_web, search_knowledge]
 REMOTE_TOOLS: list = [customer_order_query, get_evaluation_summary, query_evaluations,
                        query_my_orders, query_evaluations_by_name]
 ALL_TOOLS: list = LOCAL_TOOLS + REMOTE_TOOLS
