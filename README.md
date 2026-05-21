@@ -21,13 +21,13 @@
 | 定时任务 | XXL-JOB 2.3.0 |
 | 状态机 | 自研 jzo2o-statemachine（Redis + MySQL） |
 | 第三方 | 阿里云OSS、微信支付/登录、高德地图 |
-| AI引擎 🚧 | Python FastAPI, Streamable HTTP 流式对话 |
+| AI引擎 🚧 | Python FastAPI, LangGraph Agent, Streamable HTTP/SSE/WebSocket |
 
 ### 前端
 
 | 项目 | 定位 | 技术栈 |
 |------|------|--------|
-| `project-xzb-PC-vue3-java` | 机构端PC | Vue 3 + TypeScript + TDesign + Vite + Pinia |
+| `project-xzb-PC-vue3-java` | 机构端PC | Vue 3 + TypeScript + TDesign + Vite + Pinia + markstream-vue |
 | `project-xzb-pc-admin-vue3-java` | 运营管理后台PC | Vue 3 + TypeScript + TDesign + Vite + Pinia |
 | `project-xzb-app-uniapp-java` | 移动端App | Uniapp |
 
@@ -68,7 +68,7 @@
 | `jzo2o-api` | Feign 接口定义（纯接口，无实现） |
 | `jzo2o-foundations` | 服务类型/服务项/区域管理 |
 | `jzo2o-market` | 优惠券管理 |
-| `jzo2o-customer-dev_01` | 用户/机构/服务人员/评价 |
+| `jzo2o-customer-dev_01` | 用户/机构/服务人员/评价、AI评价总结触发 |
 | `jzo2o-publics` | 微信/短信/地图/文件上传 |
 | `jzo2o-orders/` | 订单服务聚合（base/manager/seize/dispatch/history） |
 | `jzo2o-ai/` 🚧 | AI助手Java中间层（鉴权/过滤/持久化） |
@@ -136,35 +136,78 @@ cd project-xzb-pc-admin-vue3-java && npm run dev
 
 ## AI助手 🚧开发中
 
-AI 对话功能采用两层架构，支持 HTTP SSE 和 WebSocket 两种传输模式：
+AI 对话功能采用 **Java 中间层 + Python 推理层** 两层架构，支持 HTTP SSE 和 WebSocket 两种传输模式。当前已完成基础架构和多项核心能力，更多功能持续迭代中。
 
-### jzo2o-ai（Java 中间层）
-- **职责**：Token 鉴权、会话管理、对话记录持久化、SSE/WS 代理
-- **接口**：聊天（流式响应）、会话列表查询、消息历史查询、会话取消
-- **传输模式**：配置切换 `ai.engine.mode=http|ws`
+### 已完成功能
 
-### jzo2o-ai-engine（Python 推理层）
-- **架构**：基于 LangChain 的 Agent 框架
-- **LLM 支持**：OpenAI 兼容 API（配置 `LLM_API_BASE`、`LLM_API_KEY`、`LLM_MODEL`）
-- **本地工具**：`calculate`（数学计算）、`get_current_time`（当前时间）、`search_web`（Tavily 联网搜索）
-- **远程工具**：`customer_order_query`（订单查询）、`query_evaluations`（评价查询）、`get_evaluation_summary`（评价总结）
-- **状态持久化**：SQLite Checkpoint（对话状态跨进程恢复）
-- **接口**：`/chat/stream`（HTTP SSE）、`/ws/chat`（WebSocket）
+#### 1. 智能流式对话
+- 前端使用 `markstream-vue` 组件库实现流式 Markdown 渲染，支持代码高亮、KaTeX 数学公式、Mermaid 图表
+- SSE 流式传输、取消机制（三保险：`reader.cancel()` + `AbortController.abort()` + HTTP DELETE）
+- 会话管理：会话列表、消息历史、切换历史对话
 
-### 远程工具执行流程
+#### 2. Agent 工具调用
+基于 LangGraph StateGraph 框架，支持两大类工具：
+
+| 类型 | 工具 | 执行方 |
+|------|------|--------|
+| 本地工具 | `calculate`（数学计算）、`get_current_time`（当前时间）、`search_web`（Tavily 联网搜索） | Python 直接执行 |
+| 远程工具 | `customer_order_query`（订单查询）、`query_evaluations`（评价查询）、`get_evaluation_summary`（评价总结） | Java WebSocket 执行 |
+
 ```
+远程工具执行流程：
 Python Agent 判断需调用远程工具 → 通过 WebSocket 通知 Java 层
-→ Java 执行 ToolExecutor 查询业务数据 → 结果通过 WS 返回 Python
+→ Java ToolExecutor 查询业务数据 → 结果通过 WS 返回 Python
 → Python 拼接至 Prompt 继续对话
 ```
+
+#### 3. ⭐ 评价 AI 总结（新增）
+- 定时任务（XXL-JOB）+ 管理员手动触发
+- 增量模式：AI 读取上次总结时间点后的新评价，合并生成新总结
+- 数据持久化到 `evaluation_summary` 表
+- 前端评价管理页新增「AI 总结」按钮
+
+#### 4. 连接管理
+- `SessionContext` 聚合管理每个会话的连接、回调、重连状态
+- 空闲超时自动关闭（默认 30 分钟无活动）
+- 收集模式指数退避重连（1s → 2s → 4s → ... 上限 30s，最多 3 次）
+- 心跳保活：Python → WebSocket `heartbeat` → Java → SSE comment，保持前端连接活跃
+
+#### 5. LLM 兼容性
+- OpenAI 兼容接口，配置 `.env` 即可切换后端（DeepSeek / OpenAI / 本地模型等）
+- DeepSeek 思考模式兼容：monkey-patch 确保 `reasoning_content` 在工具调用往返中不丢失
+- Checkpointing（SQLite）：Agent 对话状态持久化，进程重启后状态可恢复
+
+### 架构说明
+
+**jzo2o-ai**（Java 中间层 Spring Boot）
+- 鉴权、会话管理、对话记录持久化（`ai_chat_record` 表）
+- SSE/WebSocket 代理、远程工具执行
+- 接口：聊天流式响应、会话列表、消息历史、会话取消
+
+**jzo2o-ai-engine**（Python 推理层 FastAPI）
+- LangGraph Agent 框架，LLM 适配
+- 接口：`/chat/stream`（HTTP SSE）、`/ws/chat`（WebSocket）
+- 状态持久化：SQLite Checkpoint（`data/checkpoints.db`）
 
 ### 环境变量（jzo2o-ai-engine/.env）
 ```bash
 LLM_API_BASE=https://api.openai.com/v1
 LLM_API_KEY=your-api-key
 LLM_MODEL=gpt-4o-mini
-TAVILY_API_KEY=your-tavily-key  # 可选，联网搜索用
+TAVILY_API_KEY=your-tavily-key     # 可选，联网搜索用
+CHECKPOINT_DB_PATH=data/checkpoints.db
 ```
+
+## 开发日志
+
+详细开发记录位于 `docs/` 目录：
+
+| 文档 | 内容 |
+|------|------|
+| [ai-assistant-development-blog.md](docs/ai-assistant-development-blog.md) | AI 助手架构设计与开发全流程 |
+| [dev-log-2026-05-17.md](docs/dev-log-2026-05-17.md) | 2026-05-15~17 开发日志（Agent 工具调用、评价总结、连接管理、心跳保活、取消机制、会话管理） |
+| [ai-assistant-remaining-tasks-plan.md](docs/ai-assistant-remaining-tasks-plan.md) | AI 助手剩余升级计划 |
+| [markstream-vue-migration.md](docs/markstream-vue-migration.md) | markstream-vue 前端渲染组件引入记录 |
 
 ## 术语约定
 
