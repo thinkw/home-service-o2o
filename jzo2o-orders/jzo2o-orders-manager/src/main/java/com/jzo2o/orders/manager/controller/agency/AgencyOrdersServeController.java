@@ -33,4 +33,14 @@ public class AgencyOrdersServeController {
                 ordersServePageQueryReqDTO
         );
     }
+
+    @PostMapping("/allocation")
+    @ApiOperation("机构端分配服务人员")
+    public void allocation(@Validated @RequestBody OrdersServeAllocationReqDTO ordersServeAllocationReqDTO) {
+        ordersServeManagerService.allocation(
+                ordersServeAllocationReqDTO.getId(),
+                UserContext.currentUserId(),
+                ordersServeAllocationReqDTO.getInstitutionStaffId()
+        );
+    }
 }

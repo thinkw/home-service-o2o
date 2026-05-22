@@ -33,4 +33,15 @@ public interface OrdersServeApi {
      */
     @GetMapping("/countByInstitutionStaffId")
     InstitutionStaffServeCountResDTO countByInstitutionStaffId(@RequestParam("institutionStaffId") Long institutionStaffId);
+
+    /**
+     * 根据服务人员/机构id查询其负责的最近服务单列表
+     *
+     * @param serveProviderId 服务人员/机构id
+     * @param userType        用户类型，2：服务人员，3：机构
+     * @return 最近服务单列表 JSON 字符串
+     */
+    @GetMapping("/queryByServeProvider")
+    String queryByServeProvider(@RequestParam("serveProviderId") Long serveProviderId,
+                                @RequestParam("userType") Integer userType);
 }

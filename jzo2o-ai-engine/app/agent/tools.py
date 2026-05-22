@@ -110,6 +110,12 @@ async def query_evaluations_by_name(target_name: str) -> str:
 
 
 @tool
+async def agency_order_query() -> str:
+    """查询当前员工/企业负责的服务订单。自动识别当前登录的服务人员或机构，返回其负责的最近服务单列表，无需手动提供任何参数。"""
+    raise NotImplementedError("Remote tool executed via Java WebSocket")
+
+
+@tool
 async def search_knowledge(query: str) -> str:
     """搜索平台知识库。当用户询问平台规则、流程说明、退款政策、服务标准等问题时使用。query 为搜索关键词或问题。返回相关文档内容。"""
     import json
@@ -132,7 +138,7 @@ async def search_knowledge(query: str) -> str:
 
 LOCAL_TOOLS: list = [calculate, get_current_time, search_web, search_knowledge]
 REMOTE_TOOLS: list = [customer_order_query, get_evaluation_summary, query_evaluations,
-                       query_my_orders, query_evaluations_by_name]
+                       query_my_orders, query_evaluations_by_name, agency_order_query]
 ALL_TOOLS: list = LOCAL_TOOLS + REMOTE_TOOLS
 
 # 远程工具名集合, tool_executor 节点用于路由判断

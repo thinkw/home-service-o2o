@@ -216,6 +216,10 @@ public class OrdersSeizeServiceImpl extends ServiceImpl<OrdersSeizeMapper, Order
         if(ObjectUtils.isNull(ordersSerizeListReqDTO.getServeDistance())) {
             // 区域默认配置配置
             ConfigRegionInnerResDTO configRegionInnerResDTO = regionApi.findConfigRegionByCityCode(detail.getCityCode());
+            if (configRegionInnerResDTO == null) {
+                log.warn("未找到城市编码对应的区域配置，cityCode={}", detail.getCityCode());
+                return OrdersSeizeListResDTO.empty();
+            }
             serveDistance = (detail.getType() == UserType.INSTITUTION)
                     ? configRegionInnerResDTO.getInstitutionServeRadius().doubleValue() : configRegionInnerResDTO.getStaffServeRadius().doubleValue();
         }
@@ -331,7 +335,9 @@ public class OrdersSeizeServiceImpl extends ServiceImpl<OrdersSeizeMapper, Order
             throw new CommonException(ErrorInfo.Code.SEIZE_ORDERS_FAILD, SEIZE_ORDERS_FAILD);
         }
         ConfigRegionInnerResDTO configRegionInnerResDTO = regionApi.findConfigRegionByCityCode(detail.getCityCode());
-
+        if (configRegionInnerResDTO == null) {
+            throw new CommonException(ErrorInfo.Code.SEIZE_ORDERS_FAILD, SEIZE_ORDERS_FAILD);
+        }
 
         // 城市编码最后1位序号
         int index = RedisUtils.getCityIndex(detail.getCityCode());

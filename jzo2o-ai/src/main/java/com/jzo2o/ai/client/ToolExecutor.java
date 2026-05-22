@@ -5,6 +5,7 @@ import com.jzo2o.ai.mapper.EvaluationSummaryMapper;
 import com.jzo2o.ai.model.domain.EvaluationSummary;
 import com.jzo2o.api.customer.EvaluationApi;
 import com.jzo2o.api.orders.OrdersApi;
+import com.jzo2o.api.orders.OrdersServeApi;
 import com.jzo2o.api.orders.dto.response.OrderResDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -23,6 +24,9 @@ public class ToolExecutor {
 
     @Resource
     private OrdersApi ordersApi;
+
+    @Resource
+    private OrdersServeApi ordersServeApi;
 
     @Resource
     private EvaluationApi evaluationApi;
@@ -113,6 +117,24 @@ public class ToolExecutor {
                     return ordersJson;
                 } catch (Exception e) {
                     return toError("查询订单失败: " + e.getMessage());
+                }
+            }
+            case "agency_order_query": {
+                // 查询当前员工/企业负责的服务订单 (无需参数)
+                if (userId == null) {
+                    return toError("无法获取当前用户信息");
+                }
+                if (userType == null) {
+                    return toError("无法获取当前用户类型");
+                }
+                try {
+                    String result = ordersServeApi.queryByServeProvider(userId, userType);
+                    if (result == null || result.isEmpty() || "[]".equals(result)) {
+                        return safeToJson("暂无负责的服务订单记录");
+                    }
+                    return result;
+                } catch (Exception e) {
+                    return toError("查询服务订单失败: " + e.getMessage());
                 }
             }
             case "query_evaluations_by_name": {
