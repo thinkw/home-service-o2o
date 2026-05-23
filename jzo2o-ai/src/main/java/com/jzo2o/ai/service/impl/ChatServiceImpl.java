@@ -22,13 +22,24 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
 /**
  * 聊天服务实现 — 鉴权、持久化、SSE代理
  * Python引擎返回原始 LLM token 流, 由本层直接包装为 SSE 发给前端
+ *
+ * <p>持久化策略:
+ * <ul>
+ *   <li>user 消息: 同步落盘 (status=1)</li>
+ *   <li>assistant 消息: 通过 {@link AsyncFlusher} 异步增量落盘
+ *     <ul>
+ *       <li>创建时预 INSERT status=0 空记录</li>
+ *       <li>每 500ms 增量 UPDATE 当前内容</li>
+ *       <li>结束时 finalize(status), 幂等保证只落盘一次</li>
+ *     </ul>
+ *   </li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -46,6 +57,9 @@ public class ChatServiceImpl implements ChatService {
     @Resource
     private AiChatRecordMapper aiChatRecordMapper;
 
+    @Resource(name = "asyncFlushScheduler")
+    private ScheduledExecutorService asyncFlushScheduler;
+
     @Override
     public SseEmitter chat(ChatRequestDTO request) {
         // 1. 从 ThreadLocal 获取当前用户
@@ -61,7 +75,7 @@ public class ChatServiceImpl implements ChatService {
         // 3. 提取用户最后一条消息
         String userContent = extractLastUserMessage(request.getMessages());
 
-        // 4. 持久化用户消息
+        // 4. 同步持久化用户消息 (status=1)
         saveRecord(userId, userType, sessionId, AiConstants.ROLE_USER, userContent);
 
         // 5. 转换为 Python 引擎的消息格式
@@ -72,55 +86,87 @@ public class ChatServiceImpl implements ChatService {
 
         // 7. 根据传输模式选择 HTTP 或 WebSocket
         if ("ws".equals(aiEngineProperties.getMode())) {
-            // WebSocket 传输: 建立 per-session 连接, 双向 JSON 帧通信
-            StringBuffer responseBuffer = new StringBuffer();
-
-            aiEngineWebSocketClient.connectAndStream(sessionId, messages, emitter,
-                    token -> responseBuffer.append(token).append("\n"),
-                    () -> {
-                        String fullResponse = responseBuffer.toString();
-                        if (StrUtil.isNotBlank(fullResponse)) {
-                            saveRecord(userId, userType, sessionId, AiConstants.ROLE_ASSISTANT, fullResponse);
-                        }
-                        log.info("聊天会话完成(WS), sessionId: {}", sessionId);
-                    }, userId, userType);
+            chatViaWebSocket(sessionId, messages, emitter, userId, userType);
         } else {
-            // HTTP 传输 (原有逻辑)
-            // WebClient 的 bodyToFlux 使用行解码器, 每个 Flux 元素是原始响应的
-            // 一行内容 (不含 \n)。直接发送单行 SSE 给前端, 前端负责在每个 chunk
-            // 后追加 \n 来还原原始文档结构。不转义, 避免与 LaTeX 命令冲突。
-            StringBuilder responseBuilder = new StringBuilder();
-
-            aiEngineClient.streamChat(messages)
-                    .subscribe(
-                            rawChunk -> {
-                                if (rawChunk.startsWith("[ERROR]")) {
-                                    log.error("Python引擎返回错误: {}", rawChunk);
-                                    return;
-                                }
-                                try {
-                                    emitter.send(SseEmitter.event().data(rawChunk));
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
-                                }
-                                responseBuilder.append(rawChunk).append("\n");
-                            },
-                            error -> {
-                                log.error("聊天流式传输异常: {}", error.getMessage());
-                                emitter.completeWithError(error);
-                            },
-                            () -> {
-                                String fullResponse = responseBuilder.toString();
-                                if (StrUtil.isNotBlank(fullResponse)) {
-                                    saveRecord(userId, userType, sessionId, AiConstants.ROLE_ASSISTANT, fullResponse);
-                                }
-                                emitter.complete();
-                                log.info("聊天会话完成, sessionId: {}", sessionId);
-                            }
-                    );
+            chatViaHttp(sessionId, messages, emitter, userId, userType);
         }
 
         return emitter;
+    }
+
+    // ==================== WebSocket 模式 ====================
+
+    private void chatViaWebSocket(String sessionId, List<Map<String, String>> messages,
+                                  SseEmitter emitter, Long userId, Integer userType) {
+        StringBuffer responseBuffer = new StringBuffer();
+
+        // 创建异步落盘器: 立即预插入 status=0 记录, 启动 500ms 定时刷写
+        AsyncFlusher flusher = new AsyncFlusher(
+                userId, userType, sessionId,
+                responseBuffer::toString,
+                aiChatRecordMapper,
+                asyncFlushScheduler);
+
+        aiEngineWebSocketClient.connectAndStream(sessionId, messages, emitter,
+                // tokenAccumulator: 每个 token 追加到 buffer (Flusher 自动读取)
+                token -> responseBuffer.append(token),
+                // onComplete: agent_finish → status=1
+                () -> {
+                    flusher.finalize(AiConstants.STATUS_COMPLETE);
+                    log.info("聊天会话完成(WS), sessionId={}", sessionId);
+                },
+                // onCancel: 用户取消 → status=2, 不拼接提示
+                reason -> {
+                    log.info("用户取消会话(WS), sessionId={}, reason={}", sessionId, reason);
+                    flusher.finalize(AiConstants.STATUS_CANCELLED);
+                },
+                // onError: 异常中断 → status=3, 拼接后缀
+                error -> {
+                    log.error("会话异常中断(WS), sessionId={}, error={}", sessionId, error.getMessage());
+                    flusher.finalize(AiConstants.STATUS_INTERRUPTED);
+                },
+                userId, userType);
+    }
+
+    // ==================== HTTP 模式 ====================
+
+    private void chatViaHttp(String sessionId, List<Map<String, String>> messages,
+                             SseEmitter emitter, Long userId, Integer userType) {
+        StringBuffer responseBuffer = new StringBuffer();
+
+        // HTTP 模式同样接入 AsyncFlusher
+        AsyncFlusher flusher = new AsyncFlusher(
+                userId, userType, sessionId,
+                responseBuffer::toString,
+                aiChatRecordMapper,
+                asyncFlushScheduler);
+
+        aiEngineClient.streamChat(messages)
+                .subscribe(
+                        rawChunk -> {
+                            if (rawChunk.startsWith("[ERROR]")) {
+                                log.error("Python引擎返回错误: {}", rawChunk);
+                                return;
+                            }
+                            try {
+                                emitter.send(SseEmitter.event().data(rawChunk));
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                            // HTTP 行解码器剥掉了 \n，此处补回以还原原始文档结构
+                            responseBuffer.append(rawChunk).append("\n");
+                        },
+                        error -> {
+                            log.error("聊天流式传输异常: {}", error.getMessage());
+                            flusher.finalize(AiConstants.STATUS_INTERRUPTED);
+                            emitter.completeWithError(error);
+                        },
+                        () -> {
+                            flusher.finalize(AiConstants.STATUS_COMPLETE);
+                            emitter.complete();
+                            log.info("聊天会话完成(HTTP), sessionId: {}", sessionId);
+                        }
+                );
     }
 
     /**
@@ -163,14 +209,12 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public List<Map<String, Object>> listSessions() {
         CurrentUserInfo user = UserContext.currentUser();
-        // 子查询: 每 session 取第一条用户消息作为预览, 按最新消息倒序
         List<AiChatRecord> records = aiChatRecordMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AiChatRecord>()
                         .eq(AiChatRecord::getUserId, user.getId())
                         .eq(AiChatRecord::getRole, "user")
                         .orderByDesc(AiChatRecord::getCreateTime)
         );
-        // 按 sessionId 去重, 保留每个 session 的第一条消息
         Map<String, Map<String, Object>> sessionMap = new java.util.LinkedHashMap<>();
         for (AiChatRecord r : records) {
             if (!sessionMap.containsKey(r.getSessionId())) {
@@ -199,6 +243,7 @@ public class ChatServiceImpl implements ChatService {
             Map<String, Object> item = new java.util.HashMap<>();
             item.put("role", r.getRole());
             item.put("content", r.getContent());
+            item.put("status", r.getStatus());
             item.put("createTime", r.getCreateTime().toString());
             result.add(item);
         }
@@ -212,6 +257,7 @@ public class ChatServiceImpl implements ChatService {
         record.setSessionId(sessionId);
         record.setRole(role);
         record.setContent(content);
+        record.setStatus(AiConstants.STATUS_COMPLETE);
         record.setCreateTime(LocalDateTime.now());
         aiChatRecordMapper.insert(record);
     }

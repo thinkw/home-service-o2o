@@ -14,4 +14,18 @@ public class AiConstants {
 
     /** SseEmitter 超时 (毫秒) — 5分钟 */
     public static final Long SSE_TIMEOUT = 300000L;
+
+    // ========== 消息状态 ==========
+
+    /** 生成中 */
+    public static final int STATUS_GENERATING = 0;
+    /** 正常完成 */
+    public static final int STATUS_COMPLETE = 1;
+    /** 用户取消 */
+    public static final int STATUS_CANCELLED = 2;
+    /** 异常中断 */
+    public static final int STATUS_INTERRUPTED = 3;
+
+    /** 异常中断时的后缀提示文案 */
+    public static final String INTERRUPTED_SUFFIX = "\n\n回复未完成，输入继续以继续";
 }

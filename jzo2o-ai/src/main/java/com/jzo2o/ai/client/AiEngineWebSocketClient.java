@@ -101,10 +101,15 @@ public class AiEngineWebSocketClient {
         volatile SseEmitter emitter;
         volatile Consumer<String> tokenAccumulator;
         volatile Runnable onCompleteCallback;
+        volatile Consumer<String> onCancelCallback;
+        volatile Consumer<Throwable> onErrorCallback;
 
         // 收集模式 (CompletableFuture → 代码调用方)
         volatile CompletableFuture<String> resultFuture;
         final StringBuffer collectBuffer = new StringBuffer();
+
+        // 取消原因标记, 用于 cleanup 时路由到正确的结束回调
+        volatile String cancelReason;
 
         SessionContext(String sessionId, List<Map<String, String>> messages) {
             this.sessionId = sessionId;
@@ -144,13 +149,17 @@ public class AiEngineWebSocketClient {
      * @param messages          消息列表 (OpenAI 格式)
      * @param emitter           SSE 发射器
      * @param tokenAccumulator  每个 token 的回调 (用于拼装完整回复)
-     * @param onCompleteCallback Agent 正常完成时的回调 (用于持久化)
+     * @param onCompleteCallback Agent 正常完成时的回调 (用于持久化, status=1)
+     * @param onCancelCallback  用户主动取消时的回调 (status=2)
+     * @param onErrorCallback   异常中断时的回调 (status=3)
      */
     public void connectAndStream(String sessionId,
                                  List<Map<String, String>> messages,
                                  SseEmitter emitter,
                                  Consumer<String> tokenAccumulator,
                                  Runnable onCompleteCallback,
+                                 Consumer<String> onCancelCallback,
+                                 Consumer<Throwable> onErrorCallback,
                                  Long userId, Integer userType) {
         cancelExistingSession(sessionId);
 
@@ -160,21 +169,23 @@ public class AiEngineWebSocketClient {
         ctx.emitter = emitter;
         ctx.tokenAccumulator = tokenAccumulator;
         ctx.onCompleteCallback = onCompleteCallback;
+        ctx.onCancelCallback = onCancelCallback;
+        ctx.onErrorCallback = onErrorCallback;
         sessions.put(sessionId, ctx);
 
         // 注册回调: 前端断开 SSE 时自动取消 WebSocket
-        // (通过 cancelSession → 先发 cancel 帧给 Python, 再关闭连接)
+        // (先设置 cancelReason 标记分发目标, 再走 cancelSession 统一清理)
         emitter.onCompletion(() -> {
             log.info("SSE 完成, 取消 WebSocket, sessionId={}", sessionId);
-            cancelSession(sessionId);
+            setCancelReasonAndCancel(sessionId, "user_cancel");
         });
         emitter.onError(e -> {
             log.info("SSE 错误, 取消 WebSocket, sessionId={}: {}", sessionId, e.getMessage());
-            cancelSession(sessionId);
+            setCancelReasonAndCancel(sessionId, "sse_error");
         });
         emitter.onTimeout(() -> {
             log.info("SSE 超時, 取消 WebSocket, sessionId={}", sessionId);
-            cancelSession(sessionId);
+            setCancelReasonAndCancel(sessionId, "timeout");
         });
 
         doConnect(ctx, false);
@@ -202,17 +213,39 @@ public class AiEngineWebSocketClient {
     }
 
     /**
-     * 主动取消指定 session: 发送 cancel 帧 → 等待发送完成 → 清理资源。
+     * 主动取消指定 session (用户侧触发): 发送 cancel 帧 → 等待发送完成 → 清理资源。
      */
     public void cancelSession(String sessionId) {
+        setCancelReasonAndCancel(sessionId, "user_cancel");
+    }
+
+    /**
+     * 设置取消原因后走统一的 cancel 流程。
+     * 已设置过 cancelReason 则保留原值 (避免覆盖更精确的原因)。
+     */
+    private void setCancelReasonAndCancel(String sessionId, String reason) {
         SessionContext ctx = sessions.get(sessionId);
         if (ctx == null) {
-            // 可能已被 emitter 回调清理, 正常情况不告警
             log.debug("取消会话: 上下文已清理, sessionId={}", sessionId);
             return;
         }
-        log.info("取消会话: 找到上下文, sessionId={}, state={}, wsOpen={}",
-                sessionId, ctx.state,
+        // 仅在未设置时写入 (保留首次原因, 避免 SSE 回调覆盖更早的标记)
+        if (ctx.cancelReason == null) {
+            ctx.cancelReason = reason;
+        }
+        doCancel(sessionId);
+    }
+
+    /**
+     * 内部取消逻辑: 发送 cancel 帧 → 清理资源。
+     */
+    private void doCancel(String sessionId) {
+        SessionContext ctx = sessions.get(sessionId);
+        if (ctx == null) {
+            return;
+        }
+        log.info("取消会话: 找到上下文, sessionId={}, state={}, cancelReason={}, wsOpen={}",
+                sessionId, ctx.state, ctx.cancelReason,
                 ctx.wsSession != null && ctx.wsSession.isOpen());
         cancelReconnect(ctx);
 
@@ -221,7 +254,6 @@ public class AiEngineWebSocketClient {
             try {
                 String cancelJson = objectMapper.writeValueAsString(
                         Map.of("type", "cancel"));
-                // 先发 cancel 帧, 发送完成或失败后再清理 — 避免 disposable.dispose() 中断发送
                 wsSession.send(Mono.just(wsSession.textMessage(cancelJson)))
                         .doOnSuccess(v -> log.info("cancel 帧已发送, sessionId={}", sessionId))
                         .doOnError(e -> log.warn("发送 cancel 帧失败, sessionId={}: {}",
@@ -237,13 +269,11 @@ public class AiEngineWebSocketClient {
                                     cancelExistingSession(sessionId);
                                 }
                         );
-                return; // 清理由以上回调完成, 不在此处同步调用
+                return;
             } catch (Exception e) {
                 log.warn("序列化 cancel 帧失败, sessionId={}: {}", sessionId, e.getMessage());
                 wsSession.close().subscribe();
             }
-        } else {
-            log.info("WebSocket 已关闭, 直接清理, sessionId={}", sessionId);
         }
         cancelExistingSession(sessionId);
     }
@@ -353,7 +383,8 @@ public class AiEngineWebSocketClient {
                 case "error":
                     String msg = (String) frame.get("message");
                     log.error("Python 引擎错误, sessionId={}: {}", ctx.sessionId, msg);
-                    // emitter.completeWithError() → onError → cancelSession 统一清理
+                    // 设置 cancelReason → completeWithError → onError → dispatchCleanupCallbacks
+                    ctx.cancelReason = "python_error";
                     ctx.emitter.completeWithError(new RuntimeException(msg));
                     break;
                 default:
@@ -361,7 +392,8 @@ public class AiEngineWebSocketClient {
             }
         } catch (IOException e) {
             log.error("SseEmitter.send 失败, sessionId={}: {}", ctx.sessionId, e.getMessage());
-            // emitter.completeWithError() → onError → cancelSession 统一清理
+            // SseEmitter IO 异常归类为 SSE 层错误
+            ctx.cancelReason = "sse_error";
             ctx.emitter.completeWithError(e);
         } catch (Exception e) {
             log.error("解析 WebSocket 消息失败, sessionId={}: {}", ctx.sessionId, e.getMessage());
@@ -425,10 +457,14 @@ public class AiEngineWebSocketClient {
             try {
                 ctx.emitter.send(SseEmitter.event().name("error")
                         .data("连接中断: " + error.getMessage()));
-                ctx.emitter.completeWithError(error);
             } catch (Exception ignored) {
                 // emitter 可能已关闭
             }
+            // 设置 cancelReason 再走 completeWithError, 确保 cleanup 时能分发到 onErrorCallback
+            if (ctx.cancelReason == null) {
+                ctx.cancelReason = "ws_error";
+            }
+            ctx.emitter.completeWithError(error);
             cleanup(ctx.sessionId);
         } else if (ctx.resultFuture != null && !ctx.resultFuture.isDone() && reconnectable) {
             // 收集模式: 自动重连
@@ -547,6 +583,9 @@ public class AiEngineWebSocketClient {
     /** 连接建立前即失败 (如序列化异常) */
     private void failContext(SessionContext ctx, Throwable error) {
         if (ctx.emitter != null) {
+            if (ctx.cancelReason == null) {
+                ctx.cancelReason = "ws_error";
+            }
             ctx.emitter.completeWithError(error);
         }
         if (ctx.resultFuture != null && !ctx.resultFuture.isDone()) {
@@ -561,6 +600,7 @@ public class AiEngineWebSocketClient {
         if (ctx == null) {
             return;
         }
+        dispatchCleanupCallbacks(ctx);
         cancelReconnect(ctx);
         if (ctx.disposable != null && !ctx.disposable.isDisposed()) {
             ctx.disposable.dispose();
@@ -579,9 +619,45 @@ public class AiEngineWebSocketClient {
         if (ctx == null) {
             return;
         }
+        dispatchCleanupCallbacks(ctx);
         cancelReconnect(ctx);
         if (ctx.disposable != null && !ctx.disposable.isDisposed()) {
             ctx.disposable.dispose();
+        }
+    }
+
+    /**
+     * 根据 cancelReason 分发到对应的结束回调。
+     * 正常完成 (agent_finish) 路径不会设置 cancelReason, 因此不会触发分发。
+     */
+    private void dispatchCleanupCallbacks(SessionContext ctx) {
+        if (ctx.cancelReason == null) {
+            // 正常清理 (如 agent_finish 后继的 emitter.complete → cancelSession), 无需额外回调
+            return;
+        }
+        try {
+            switch (ctx.cancelReason) {
+                case "user_cancel":
+                case "timeout":
+                    if (ctx.onCancelCallback != null) {
+                        ctx.onCancelCallback.accept(ctx.cancelReason);
+                    }
+                    break;
+                case "sse_error":
+                case "ws_error":
+                case "python_error":
+                    if (ctx.onErrorCallback != null) {
+                        ctx.onErrorCallback.accept(
+                                new RuntimeException("会话异常中断: " + ctx.cancelReason));
+                    }
+                    break;
+                default:
+                    log.warn("未知 cancelReason: {}, sessionId={}", ctx.cancelReason, ctx.sessionId);
+            }
+        } catch (Exception e) {
+            // 回调异常不影响会话清理: 资源释放 (disposable / wsSession) 必须继续执行
+            log.error("dispatchCleanupCallbacks 异常, sessionId={}, reason={}",
+                    ctx.sessionId, ctx.cancelReason, e);
         }
     }
 

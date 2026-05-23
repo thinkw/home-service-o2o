@@ -32,6 +32,9 @@ public class AiChatRecord {
     /** 消息内容 */
     private String content;
 
+    /** 消息状态: 0-生成中, 1-正常完成, 2-用户取消, 3-异常中断 (仅assistant消息) */
+    private Integer status;
+
     /** 创建时间 */
     private LocalDateTime createTime;
 }
