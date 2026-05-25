@@ -85,6 +85,7 @@ job/
 ### claude ###
 /.claude/
 /CLAUDE.md
+
 /jzo2o-ai-engine/scripts/
 /project-xzb-PC-vue3-java/DEV_LOG_20260514.md
 /jzo2o-customer-dev_01/src/main/resources/sql/evaluation.sql
@@ -95,3 +96,4 @@ job/
 /docs/chat-markdown-BYCCjmpm.js
 /docs/history_202605170121.md
 /jzo2o-ai-engine/data/milvus_knowledge.db/
+/jzo2o-ai/src/main/resources/db/migration/

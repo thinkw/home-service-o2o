@@ -1,6 +1,7 @@
 package com.jzo2o.ai.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jzo2o.ai.constants.AiConstants;
 import com.jzo2o.ai.properties.AiEngineProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -111,6 +112,9 @@ public class AiEngineWebSocketClient {
         // 取消原因标记, 用于 cleanup 时路由到正确的结束回调
         volatile String cancelReason;
 
+        // 心跳: 定时发送 ping, 超时未收到任何帧视为连接断开
+        volatile ScheduledFuture<?> pingFuture;
+
         SessionContext(String sessionId, List<Map<String, String>> messages) {
             this.sessionId = sessionId;
             this.messages = messages;
@@ -220,6 +224,32 @@ public class AiEngineWebSocketClient {
     }
 
     /**
+     * 引擎侧取消 — 仅发送 cancel 帧给 Python, <b>不做 cleanup</b>。
+     * 由 AsyncFlusher 的内容停滞检测调用, 期望 Python 收到 cancel 后正常完成。
+     * 若 Python 无响应, AsyncFlusher 会在 {@link AiConstants#STALE_CANCEL_WAIT_SECONDS} 后强制 finalize。
+     */
+    public void sendCancelToEngine(String sessionId) {
+        SessionContext ctx = sessions.get(sessionId);
+        if (ctx == null) {
+            return;
+        }
+        WebSocketSession wsSession = ctx.wsSession;
+        if (wsSession != null && wsSession.isOpen()) {
+            try {
+                String cancelJson = objectMapper.writeValueAsString(
+                        Map.of("type", "cancel"));
+                wsSession.send(Mono.just(wsSession.textMessage(cancelJson)))
+                        .subscribe(
+                                v -> log.info("引擎取消帧已发送, sessionId={}", sessionId),
+                                e -> log.warn("发送引擎取消帧失败, sessionId={}: {}", sessionId, e.getMessage())
+                        );
+            } catch (Exception e) {
+                log.warn("序列化引擎取消帧失败, sessionId={}: {}", sessionId, e.getMessage());
+            }
+        }
+    }
+
+    /**
      * 设置取消原因后走统一的 cancel 流程。
      * 已设置过 cancelReason 则保留原值 (避免覆盖更精确的原因)。
      */
@@ -307,6 +337,9 @@ public class AiEngineWebSocketClient {
             ctx.state = ConnectionState.ACTIVE;
             updateActivity(ctx);
 
+            // 启动 Ping/Pong 心跳监控
+            startPingMonitor(ctx);
+
             Mono<Void> send = session.send(
                     Mono.just(session.textMessage(userMessageJson)));
 
@@ -380,6 +413,9 @@ public class AiEngineWebSocketClient {
                     // 流模式: 透传为 SSE 注释维持 SSE 长连接
                     ctx.emitter.send(SseEmitter.event().comment("hb"));
                     break;
+                case "pong":
+                    // Python 回复的 Ping/Pong 保活帧, 仅更新心跳时间 (已在 doOnNext 中处理)
+                    break;
                 case "error":
                     String msg = (String) frame.get("message");
                     log.error("Python 引擎错误, sessionId={}: {}", ctx.sessionId, msg);
@@ -434,6 +470,9 @@ public class AiEngineWebSocketClient {
                     break;
                 case "heartbeat":
                     // 保活心跳, 收集模式下仅更新活动时间
+                    break;
+                case "pong":
+                    // Ping/Pong 保活帧
                     break;
                 default:
                     // tool_start / tool_end 在收集模式下忽略
@@ -578,6 +617,71 @@ public class AiEngineWebSocketClient {
         }
     }
 
+    // ==================== Ping/Pong 心跳 (传输层故障检测) ====================
+
+    /**
+     * 启动 per-session Ping/Pong 心跳监控。
+     * <ul>
+     *   <li>每 {@link AiConstants#PING_INTERVAL_SECONDS}s 发送一次 ping 帧</li>
+     *   <li>超过 {@link AiConstants#PONG_TIMEOUT_SECONDS}s 未收到任何帧 → 连接死亡</li>
+     * </ul>
+     */
+    private void startPingMonitor(SessionContext ctx) {
+        long pingIntervalMs = AiConstants.PING_INTERVAL_SECONDS * 1000L;
+        long pongTimeoutMs = AiConstants.PONG_TIMEOUT_SECONDS * 1000L;
+
+        ctx.pingFuture = scheduler.scheduleWithFixedDelay(() -> {
+            // 会话已清理, 取消本监控
+            if (!sessions.containsKey(ctx.sessionId) || ctx.state == ConnectionState.DISCONNECTED) {
+                cancelPingMonitor(ctx);
+                return;
+            }
+
+            long now = System.currentTimeMillis();
+            long timeSinceLastFrame = now - ctx.lastActivityTime;
+
+            // 超过 PONG_TIMEOUT 未收到任何帧 → 连接死亡
+            if (timeSinceLastFrame > pongTimeoutMs) {
+                log.warn("Ping 超时, 连接死亡, sessionId={}, idle={}ms",
+                        ctx.sessionId, timeSinceLastFrame);
+                if (ctx.cancelReason == null) {
+                    ctx.cancelReason = "ws_ping_timeout";
+                }
+                if (ctx.emitter != null) {
+                    ctx.emitter.completeWithError(
+                            new RuntimeException("WebSocket 连接超时: " + timeSinceLastFrame + "ms 无数据"));
+                }
+                cleanup(ctx.sessionId);
+                return;
+            }
+
+            // 发送 ping 帧 (主动探测 + 触发 TCP 层错误检测)
+            WebSocketSession ws = ctx.wsSession;
+            if (ws != null && ws.isOpen()) {
+                try {
+                    String pingJson = objectMapper.writeValueAsString(
+                            Map.of("type", "ping"));
+                    ws.send(Mono.just(ws.textMessage(pingJson)))
+                            .subscribe(
+                                    null,
+                                    e -> log.warn("发送 ping 帧失败, sessionId={}: {}",
+                                            ctx.sessionId, e.getMessage())
+                            );
+                } catch (Exception e) {
+                    log.warn("序列化 ping 帧失败, sessionId={}: {}", ctx.sessionId, e.getMessage());
+                }
+            }
+        }, pingIntervalMs, pingIntervalMs, TimeUnit.MILLISECONDS);
+    }
+
+    /** 取消 Ping 监控任务 */
+    private void cancelPingMonitor(SessionContext ctx) {
+        ScheduledFuture<?> future = ctx.pingFuture;
+        if (future != null && !future.isDone()) {
+            future.cancel(false);
+        }
+    }
+
     // ==================== 失败 & 清理 ====================
 
     /** 连接建立前即失败 (如序列化异常) */
@@ -602,6 +706,7 @@ public class AiEngineWebSocketClient {
         }
         dispatchCleanupCallbacks(ctx);
         cancelReconnect(ctx);
+        cancelPingMonitor(ctx);
         if (ctx.disposable != null && !ctx.disposable.isDisposed()) {
             ctx.disposable.dispose();
         }
@@ -621,6 +726,7 @@ public class AiEngineWebSocketClient {
         }
         dispatchCleanupCallbacks(ctx);
         cancelReconnect(ctx);
+        cancelPingMonitor(ctx);
         if (ctx.disposable != null && !ctx.disposable.isDisposed()) {
             ctx.disposable.dispose();
         }
@@ -645,6 +751,7 @@ public class AiEngineWebSocketClient {
                     break;
                 case "sse_error":
                 case "ws_error":
+                case "ws_ping_timeout":
                 case "python_error":
                     if (ctx.onErrorCallback != null) {
                         ctx.onErrorCallback.accept(

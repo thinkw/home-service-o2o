@@ -100,12 +100,22 @@ public class ChatServiceImpl implements ChatService {
                                   SseEmitter emitter, Long userId, Integer userType) {
         StringBuffer responseBuffer = new StringBuffer();
 
-        // 创建异步落盘器: 立即预插入 status=0 记录, 启动 500ms 定时刷写
+        // 创建异步落盘器: 立即预插入 status=0 记录, 启动 500ms 定时刷写 + 内容停滞检测
         AsyncFlusher flusher = new AsyncFlusher(
                 userId, userType, sessionId,
                 responseBuffer::toString,
                 aiChatRecordMapper,
-                asyncFlushScheduler);
+                asyncFlushScheduler,
+                // onStaleCallback: false=首次停滞(发cancel给Python), true=强制终结(清理WebSocket)
+                forceCleanup -> {
+                    if (!forceCleanup) {
+                        log.warn("内容停滞, 发送取消指令给引擎, sessionId={}", sessionId);
+                        aiEngineWebSocketClient.sendCancelToEngine(sessionId);
+                    } else {
+                        log.warn("取消后无响应, 强制清理WebSocket, sessionId={}", sessionId);
+                        aiEngineWebSocketClient.cancelSession(sessionId);
+                    }
+                });
 
         aiEngineWebSocketClient.connectAndStream(sessionId, messages, emitter,
                 // tokenAccumulator: 每个 token 追加到 buffer (Flusher 自动读取)
@@ -134,12 +144,13 @@ public class ChatServiceImpl implements ChatService {
                              SseEmitter emitter, Long userId, Integer userType) {
         StringBuffer responseBuffer = new StringBuffer();
 
-        // HTTP 模式同样接入 AsyncFlusher
+        // HTTP 模式同样接入 AsyncFlusher (HTTP 模式无停滞回调, 由 HTTP 超时自行处理)
         AsyncFlusher flusher = new AsyncFlusher(
                 userId, userType, sessionId,
                 responseBuffer::toString,
                 aiChatRecordMapper,
-                asyncFlushScheduler);
+                asyncFlushScheduler,
+                null);
 
         aiEngineClient.streamChat(messages)
                 .subscribe(

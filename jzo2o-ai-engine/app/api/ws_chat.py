@@ -68,6 +68,9 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                     cancel_event.set()
                     tool_ctx.cancel_all()
                     logger.info("收到取消请求, session_id=%s", session_id)
+                elif msg_type == "ping":
+                    # Java 心跳保活 → 回复 pong
+                    await send_queue.put({"type": "pong"})
                 elif msg_type == "user_message":
                     # 用户新消息 → 入队, 触发 Agent 运行
                     await incoming_queue.put(msg)

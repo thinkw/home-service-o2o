@@ -28,4 +28,17 @@ public class AiConstants {
 
     /** 异常中断时的后缀提示文案 */
     public static final String INTERRUPTED_SUFFIX = "\n\n回复未完成，输入继续以继续";
+
+    // ========== WebSocket 心跳 & 停滞检测 ==========
+
+    /** WebSocket 心跳 Ping 间隔 (秒) */
+    public static final int PING_INTERVAL_SECONDS = 10;
+    /** WebSocket Pong 超时 (秒): 超过此时长未收到任何帧视为连接断开 */
+    public static final int PONG_TIMEOUT_SECONDS = 15;
+    /** 内容停滞检测间隔 (秒) */
+    public static final int STALE_CHECK_INTERVAL_SECONDS = 5;
+    /** 内容停滞阈值 (秒): 超过此时长内容无变化视为推理卡死 */
+    public static final int STALE_CONTENT_THRESHOLD_SECONDS = 30;
+    /** 发送取消指令后等待响应的时间 (秒), 超时强制中断 */
+    public static final int STALE_CANCEL_WAIT_SECONDS = 10;
 }
