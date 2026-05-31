@@ -28,4 +28,13 @@ public class EvaluationPageByTargetReqDTO {
 
     @ApiModelProperty(value = "排序字段，1为按评价时间排序，2为按热度排序", required = true)
     private Integer sortBy;
+
+    @ApiModelProperty("评价等级，1差评，2中评，3好评")
+    private Integer scoreLevel;
+
+    @ApiModelProperty("评价开始时间（下限）")
+    private String minEvaluationTime;
+
+    @ApiModelProperty("评价结束时间（上限）")
+    private String maxEvaluationTime;
 }

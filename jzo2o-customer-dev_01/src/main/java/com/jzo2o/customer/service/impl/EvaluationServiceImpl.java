@@ -144,9 +144,45 @@ public class EvaluationServiceImpl implements EvaluationService {
 
         // 图片
         if (evaluation.getPictureArray() != null) {
-            dto.setPictureArray(JSONUtil.parseArray(evaluation.getPictureArray()).toArray(new String[0]));
+            cn.hutool.json.JSONArray picArray = JSONUtil.parseArray(evaluation.getPictureArray());
+            String[] pics = new String[picArray.size()];
+            for (int i = 0; i < picArray.size(); i++) {
+                pics[i] = picArray.getStr(i);
+            }
+            dto.setPictureArray(pics);
         }
 
+        return dto;
+    }
+
+    /**
+     * 将Evaluation实体转为EvaluationAndOrdersResDTO
+     */
+    private EvaluationAndOrdersResDTO toEvaluationAndOrdersResDTO(Evaluation e) {
+        EvaluationAndOrdersResDTO dto = new EvaluationAndOrdersResDTO();
+        dto.setId(e.getId().toString());
+        dto.setTargetId(e.getTargetId().toString());
+        dto.setRelationId(e.getRelationId().toString());
+        dto.setTargetName(e.getTargetName());
+        dto.setEvaluatorId(e.getEvaluatorId().toString());
+        dto.setContent(e.getContent());
+        dto.setTotalScore(e.getTotalScore() != null ? e.getTotalScore().doubleValue() : null);
+        dto.setScoreLevel(e.getScoreLevel());
+        dto.setCreateTime(e.getCreateTime() != null ? Date.from(e.getCreateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
+        dto.setUpdateTime(e.getUpdateTime() != null ? Date.from(e.getUpdateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
+        if (e.getPictureArray() != null) {
+            cn.hutool.json.JSONArray picArray = JSONUtil.parseArray(e.getPictureArray());
+            String[] pics = new String[picArray.size()];
+            for (int i = 0; i < picArray.size(); i++) {
+                pics[i] = picArray.getStr(i);
+            }
+            dto.setPictureArray(pics);
+        }
+        EvaluationAndOrdersResDTO.Person person = new EvaluationAndOrdersResDTO.Person();
+        person.setNickName(e.getEvaluatorNickname());
+        person.setAvatar(e.getEvaluatorAvatar());
+        person.setIsAnonymous(e.getIsAnonymous());
+        dto.setEvaluatorInfo(person);
         return dto;
     }
 
@@ -358,10 +394,16 @@ public class EvaluationServiceImpl implements EvaluationService {
         int pageNo = ObjectUtil.defaultIfNull(req.getPageNo(), 1);
         int pageSize = ObjectUtil.defaultIfNull(req.getPageSize(), 10);
 
+        Integer targetTypeId = req.getTargetTypeId() != null ? Integer.valueOf(req.getTargetTypeId()) : null;
+        Long targetId = req.getTargetId() != null ? Long.valueOf(req.getTargetId()) : null;
+
         LambdaQueryWrapper<Evaluation> wrapper = Wrappers.<Evaluation>lambdaQuery()
                 .eq(Evaluation::getStatus, 0)
-                .eq(req.getTargetTypeId() != null, Evaluation::getTargetTypeId, req.getTargetTypeId() != null ? Integer.valueOf(req.getTargetTypeId()) : null)
-                .eq(req.getTargetId() != null, Evaluation::getTargetId, req.getTargetId() != null ? Long.valueOf(req.getTargetId()) : null)
+                .eq(targetTypeId != null, Evaluation::getTargetTypeId, targetTypeId)
+                .eq(targetId != null, Evaluation::getTargetId, targetId)
+                .eq(req.getScoreLevel() != null, Evaluation::getScoreLevel, req.getScoreLevel())
+                .ge(ObjectUtil.isNotEmpty(req.getMinEvaluationTime()), Evaluation::getCreateTime, req.getMinEvaluationTime())
+                .le(ObjectUtil.isNotEmpty(req.getMaxEvaluationTime()), Evaluation::getCreateTime, req.getMaxEvaluationTime())
                 .orderByDesc(Evaluation::getCreateTime);
 
         Page<Evaluation> page = new Page<>(pageNo, pageSize);
@@ -397,28 +439,9 @@ public class EvaluationServiceImpl implements EvaluationService {
         }
 
         // 组装评价数据
-        List<EvaluationAndOrdersResDTO> list = result.getRecords().stream().map(e -> {
-            EvaluationAndOrdersResDTO dto = new EvaluationAndOrdersResDTO();
-            dto.setId(e.getId().toString());
-            dto.setTargetId(e.getTargetId().toString());
-            dto.setRelationId(e.getRelationId().toString());
-            dto.setTargetName(e.getTargetName());
-            dto.setEvaluatorId(e.getEvaluatorId().toString());
-            dto.setContent(e.getContent());
-            dto.setTotalScore(e.getTotalScore() != null ? e.getTotalScore().doubleValue() : null);
-            dto.setScoreLevel(e.getScoreLevel());
-            dto.setCreateTime(e.getCreateTime() != null ? Date.from(e.getCreateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
-            dto.setUpdateTime(e.getUpdateTime() != null ? Date.from(e.getUpdateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
-            if (e.getPictureArray() != null) {
-                dto.setPictureArray(JSONUtil.parseArray(e.getPictureArray()).toArray(new String[0]));
-            }
-            EvaluationAndOrdersResDTO.Person person = new EvaluationAndOrdersResDTO.Person();
-            person.setNickName(e.getEvaluatorNickname());
-            person.setAvatar(e.getEvaluatorAvatar());
-            person.setIsAnonymous(e.getIsAnonymous());
-            dto.setEvaluatorInfo(person);
-            return dto;
-        }).collect(Collectors.toList());
+        List<EvaluationAndOrdersResDTO> list = result.getRecords().stream()
+                .map(this::toEvaluationAndOrdersResDTO)
+                .collect(Collectors.toList());
 
         // 关联订单信息
         List<Long> orderIds = list.stream().map(e -> Long.valueOf(e.getRelationId())).distinct().collect(Collectors.toList());
@@ -459,28 +482,9 @@ public class EvaluationServiceImpl implements EvaluationService {
             return Collections.emptyList();
         }
 
-        List<EvaluationAndOrdersResDTO> list = result.getRecords().stream().map(e -> {
-            EvaluationAndOrdersResDTO dto = new EvaluationAndOrdersResDTO();
-            dto.setId(e.getId().toString());
-            dto.setTargetId(e.getTargetId().toString());
-            dto.setRelationId(e.getRelationId().toString());
-            dto.setTargetName(e.getTargetName());
-            dto.setEvaluatorId(e.getEvaluatorId().toString());
-            dto.setContent(e.getContent());
-            dto.setTotalScore(e.getTotalScore() != null ? e.getTotalScore().doubleValue() : null);
-            dto.setScoreLevel(e.getScoreLevel());
-            dto.setCreateTime(e.getCreateTime() != null ? Date.from(e.getCreateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
-            dto.setUpdateTime(e.getUpdateTime() != null ? Date.from(e.getUpdateTime().atZone(ZoneId.systemDefault()).toInstant()) : null);
-            if (e.getPictureArray() != null) {
-                dto.setPictureArray(JSONUtil.parseArray(e.getPictureArray()).toArray(new String[0]));
-            }
-            EvaluationAndOrdersResDTO.Person person = new EvaluationAndOrdersResDTO.Person();
-            person.setNickName(e.getEvaluatorNickname());
-            person.setAvatar(e.getEvaluatorAvatar());
-            person.setIsAnonymous(e.getIsAnonymous());
-            dto.setEvaluatorInfo(person);
-            return dto;
-        }).collect(Collectors.toList());
+        List<EvaluationAndOrdersResDTO> list = result.getRecords().stream()
+                .map(this::toEvaluationAndOrdersResDTO)
+                .collect(Collectors.toList());
 
         // 关联订单信息
         List<Long> orderIds = list.stream().map(e -> Long.valueOf(e.getRelationId())).distinct().collect(Collectors.toList());

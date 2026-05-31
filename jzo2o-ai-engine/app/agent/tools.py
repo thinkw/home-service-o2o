@@ -87,7 +87,7 @@ async def customer_order_query(order_id: str) -> str:
 
 @tool
 async def get_evaluation_summary(target_type_id: int, target_id: int) -> str:
-    """读取上次 AI 评价总结。返回旧总结内容和上次总结时间, 用于增量合并。"""
+    """纯查询: 读取已有的 AI 评价总结, 不触发任何 AI 生成。返回 has_previous(bool) 和 summary(str)。"""
     raise NotImplementedError("Remote tool executed via Java WebSocket")
 
 

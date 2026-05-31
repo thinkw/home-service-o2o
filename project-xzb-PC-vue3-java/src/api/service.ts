@@ -166,18 +166,23 @@ export function deleteEvaluation(id) {
     url: '/customer/agency/evaluation/' + id
   })
 }
-// 查询 AI 评价总结 (超时 180s, AI 生成需要较长时间)
+// 查询已有 AI 评价总结 (纯查库, 无超时)
 export function getEvaluationSummary(targetTypeId, targetId) {
   return request.get({
-    url: '/customer/agency/evaluation/summarize',
-    params: { targetTypeId, targetId },
+    url: `/customer/agency/evaluation/summarize?targetTypeId=${targetTypeId}&targetId=${targetId}`
+  })
+}
+// 触发 AI 评价总结 (增量生成, 超时 180s)
+export function refreshEvaluationSummary(targetTypeId, targetId) {
+  return request.post({
+    url: `/customer/agency/evaluation/summarize?targetTypeId=${targetTypeId}&targetId=${targetId}`,
     timeout: 180 * 1000
   })
 }
-// 触发 AI 评价总结
-export function triggerEvaluationSummary(targetTypeId, targetId) {
-  return request.get({
-    url: '/customer/agency/evaluation/summarize',
-    params: { targetTypeId, targetId }
+// 触发 AI 评价总结 (全量生成, 忽略历史游标, 超时 180s)
+export function summarizeEvaluationFull(targetTypeId, targetId) {
+  return request.post({
+    url: `/customer/agency/evaluation/summarize/full?targetTypeId=${targetTypeId}&targetId=${targetId}`,
+    timeout: 180 * 1000
   })
 }

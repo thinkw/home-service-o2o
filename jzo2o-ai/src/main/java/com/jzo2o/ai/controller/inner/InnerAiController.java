@@ -27,8 +27,36 @@ public class InnerAiController {
     @ApiOperation("触发 AI 评价总结 (增量)")
     public Map<String, String> summarizeEvaluation(@RequestParam("targetTypeId") Integer targetTypeId,
                                                     @RequestParam("targetId") Long targetId) {
-        String summary = evaluationSummaryService.summarize(targetTypeId, targetId);
-        return Map.of("summary", summary != null ? summary : "");
+        try {
+            String summary = evaluationSummaryService.summarize(targetTypeId, targetId);
+            return Map.of("summary", summary != null ? summary : "",
+                           "status", "SUCCESS");
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("PROCESSING:")) {
+                return Map.of("summary", "",
+                               "status", "PROCESSING",
+                               "msg", e.getMessage().substring("PROCESSING:".length()));
+            }
+            throw e;
+        }
+    }
+
+    @PostMapping("/evaluation/summarize/full")
+    @ApiOperation("触发 AI 评价总结 (全量, 忽略历史游标)")
+    public Map<String, String> summarizeEvaluationFull(@RequestParam("targetTypeId") Integer targetTypeId,
+                                                        @RequestParam("targetId") Long targetId) {
+        try {
+            String summary = evaluationSummaryService.summarizeFull(targetTypeId, targetId);
+            return Map.of("summary", summary != null ? summary : "",
+                           "status", "SUCCESS");
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("PROCESSING:")) {
+                return Map.of("summary", "",
+                               "status", "PROCESSING",
+                               "msg", e.getMessage().substring("PROCESSING:".length()));
+            }
+            throw e;
+        }
     }
 
     @GetMapping("/evaluation/summarize")

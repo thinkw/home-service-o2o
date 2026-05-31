@@ -68,7 +68,13 @@
         评价对象：<strong>{{ summaryTargetName }}</strong>
       </div>
       <div v-if="summaryLoading" class="summary-loading">
-        <t-loading text="AI 正在生成评价总结..." />
+        <t-loading text="正在查询 AI 总结..." />
+      </div>
+      <div v-else-if="summaryRefreshing || summaryFullLoading" class="summary-loading">
+        <t-loading :text="summaryFullLoading ? 'AI 正在全量生成评价总结...' : 'AI 正在增量生成评价总结...'" />
+      </div>
+      <div v-else-if="summaryProcessing" class="summary-processing">
+        AI 评价总结正在生成中, 请稍后点击下方【查看总结】按钮
       </div>
       <div v-else-if="summaryError" class="summary-error">
         {{ summaryError }}
@@ -79,9 +85,29 @@
       <div v-else class="summary-empty">暂无总结数据</div>
       <div class="summary-footer">
         <button class="bt-grey wt-60" @click="summaryVisible = false">关闭</button>
-        <button class="bt wt-100" :disabled="summaryLoading" @click="handleClickSummary(currentSummaryRow)">
-          {{ summaryLoading ? '生成中...' : '重新生成' }}
+        <button
+          v-if="summaryProcessing"
+          class="bt wt-100"
+          @click="handleClickSummary(currentSummaryRow)"
+        >
+          查看总结
         </button>
+        <template v-else>
+          <button
+            class="bt wt-100"
+            :disabled="summaryLoading || summaryRefreshing || summaryFullLoading"
+            @click="handleRefreshSummary"
+          >
+            {{ summaryRefreshing ? '生成中...' : '增量总结' }}
+          </button>
+          <button
+            class="bt wt-100"
+            :disabled="summaryLoading || summaryRefreshing || summaryFullLoading"
+            @click="handleFullSummary"
+          >
+            {{ summaryFullLoading ? '生成中...' : '全量总结' }}
+          </button>
+        </template>
       </div>
     </t-dialog>
   </div>
@@ -90,7 +116,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { getEvaluationList, getEvaluationDetail, deleteEvaluation, getEvaluationSummary } from '@/api/service'
+import { getEvaluationList, getEvaluationDetail, deleteEvaluation, getEvaluationSummary, refreshEvaluationSummary, summarizeEvaluationFull } from '@/api/service'
 import { COLUMNS } from './constants'
 import SearchForm from './components/SearchForm.vue'
 import DetailDialog from './components/DetailDialog.vue'
@@ -107,7 +133,10 @@ const deleteId = ref('')
 
 // AI 总结相关
 const summaryVisible = ref(false)
-const summaryLoading = ref(false)
+const summaryLoading = ref(false)       // GET 查看 loading
+const summaryRefreshing = ref(false)    // POST 增量 loading
+const summaryFullLoading = ref(false)   // POST 全量 loading
+const summaryProcessing = ref(false)    // PROCESSING 状态 (有人正在生成中)
 const summaryContent = ref('')
 const summaryError = ref('')
 const summaryTargetName = ref('')
@@ -124,8 +153,8 @@ const sort = ref([{ sortBy: 'createTime', descending: true }])
 // 搜索参数
 const searchParams = ref({
   scoreLevel: null,
-  minEvaluationTime: '',
-  maxEvaluationTime: ''
+  minEvaluationTime: null,
+  maxEvaluationTime: null
 })
 // 请求参数
 const requestData = ref({
@@ -134,8 +163,8 @@ const requestData = ref({
   pageSize: 10,
   sortBy: 1,
   scoreLevel: null,
-  minEvaluationTime: '',
-  maxEvaluationTime: ''
+  minEvaluationTime: null,
+  maxEvaluationTime: null
 })
 
 onMounted(() => {
@@ -174,8 +203,8 @@ const handleSearch = (val) => {
     requestData.value.minEvaluationTime = val.evaluationTime[0]
     requestData.value.maxEvaluationTime = val.evaluationTime[1]
   } else {
-    requestData.value.minEvaluationTime = ''
-    requestData.value.maxEvaluationTime = ''
+    requestData.value.minEvaluationTime = null
+    requestData.value.maxEvaluationTime = null
   }
   requestData.value.pageNo = 1
   pagination.value.defaultCurrent = 1
@@ -185,8 +214,8 @@ const handleSearch = (val) => {
 // 重置
 const handleReset = () => {
   requestData.value.scoreLevel = null
-  requestData.value.minEvaluationTime = ''
-  requestData.value.maxEvaluationTime = ''
+  requestData.value.minEvaluationTime = null
+  requestData.value.maxEvaluationTime = null
   requestData.value.pageNo = 1
   pagination.value.defaultCurrent = 1
   fetchData()
@@ -229,28 +258,95 @@ const handleClickDelete = (row) => {
   dialogDeleteVisible.value = true
 }
 
-// AI 总结 — GET 端点已自带"有则返回/无则生成"逻辑
+// AI 总结 — 打开弹窗, GET 纯查库
 const handleClickSummary = async (row) => {
   currentSummaryRow.value = row
   summaryTargetName.value = row.targetName || ''
   summaryVisible.value = true
   summaryError.value = ''
   summaryContent.value = ''
+  summaryProcessing.value = false
   summaryLoading.value = true
+  summaryRefreshing.value = false
+  summaryFullLoading.value = false
 
   try {
     const res = await getEvaluationSummary(7, row.targetId)
-    // 后端返回的 data 字段包含 {summary: "..."}
     if (res && res.data && res.data.summary) {
       summaryContent.value = res.data.summary
-    } else {
-      summaryError.value = (res && res.msg) || '无返回数据'
+    }
+    // 无返回数据不报错，由 UI 显示「暂无总结」
+  } catch (err) {
+    // GET 失败不弹 error，由 UI 显示「暂无总结」，用户可主动点刷新
+    console.error('查询 AI 总结失败:', err)
+  } finally {
+    summaryLoading.value = false
+  }
+}
+
+// AI 总结 — POST 触发增量生成
+const handleRefreshSummary = async () => {
+  const row = currentSummaryRow.value
+  if (!row) return
+
+  summaryError.value = ''
+  summaryContent.value = ''
+  summaryProcessing.value = false
+  summaryRefreshing.value = true
+  summaryFullLoading.value = false
+  summaryLoading.value = false
+
+  try {
+    const res = await refreshEvaluationSummary(7, row.targetId)
+    if (res && res.data) {
+      if (res.data.status === 'SUCCESS' && res.data.summary) {
+        summaryContent.value = res.data.summary
+        MessagePlugin.success('增量总结已更新')
+      } else if (res.data.status === 'PROCESSING') {
+        summaryProcessing.value = true
+        MessagePlugin.info(res.data.msg || '正在生成中, 请稍后查看')
+      } else if (res.data.summary) {
+        summaryContent.value = res.data.summary
+      }
     }
   } catch (err) {
     const msg = err?.response?.data?.msg || err?.message || String(err)
     summaryError.value = msg
   } finally {
-    summaryLoading.value = false
+    summaryRefreshing.value = false
+  }
+}
+
+// AI 总结 — POST 触发全量生成（忽略历史游标）
+const handleFullSummary = async () => {
+  const row = currentSummaryRow.value
+  if (!row) return
+
+  summaryError.value = ''
+  summaryContent.value = ''
+  summaryProcessing.value = false
+  summaryFullLoading.value = true
+  summaryRefreshing.value = false
+  summaryLoading.value = false
+
+  try {
+    const res = await summarizeEvaluationFull(7, row.targetId)
+    if (res && res.data) {
+      if (res.data.status === 'SUCCESS' && res.data.summary) {
+        summaryContent.value = res.data.summary
+        MessagePlugin.success('全量总结已更新')
+      } else if (res.data.status === 'PROCESSING') {
+        summaryProcessing.value = true
+        MessagePlugin.info(res.data.msg || '正在生成中, 请稍后查看')
+      } else if (res.data.summary) {
+        summaryContent.value = res.data.summary
+      }
+    }
+  } catch (err) {
+    const msg = err?.response?.data?.msg || err?.message || String(err)
+    summaryError.value = msg
+  } finally {
+    summaryFullLoading.value = false
   }
 }
 

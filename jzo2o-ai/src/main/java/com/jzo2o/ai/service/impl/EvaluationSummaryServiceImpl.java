@@ -9,6 +9,8 @@ import com.jzo2o.ai.model.domain.EvaluationSummary;
 import com.jzo2o.ai.service.EvaluationSummaryService;
 import com.jzo2o.api.customer.EvaluationApi;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -35,6 +37,11 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
     @Resource
     private EvaluationApi evaluationApi;
 
+    @Resource
+    private RedissonClient redissonClient;
+
+    private static final String LOCK_KEY_PREFIX = "eval:summary:lock:";
+
     @Override
     public String getSummary(Integer targetTypeId, Long targetId) {
         EvaluationSummary summary = summaryMapper.selectOne(
@@ -46,22 +53,78 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
 
     @Override
     public String summarize(Integer targetTypeId, Long targetId) {
+        String lockKey = LOCK_KEY_PREFIX + targetTypeId + ":" + targetId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(0, 180, TimeUnit.SECONDS);
+            if (!locked) {
+                log.info("分布式锁被占用, 拒绝重复生成: targetTypeId={}, targetId={}", targetTypeId, targetId);
+                throw new RuntimeException("PROCESSING:该目标的评价总结正在生成中, 请稍后点击【查看总结】");
+            }
+            return doSummarizeInternal(targetTypeId, targetId, false);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("获取分布式锁被中断", e);
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    @Override
+    public String summarizeFull(Integer targetTypeId, Long targetId) {
+        String lockKey = LOCK_KEY_PREFIX + targetTypeId + ":" + targetId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(0, 180, TimeUnit.SECONDS);
+            if (!locked) {
+                log.info("分布式锁被占用, 拒绝重复生成(全量): targetTypeId={}, targetId={}", targetTypeId, targetId);
+                throw new RuntimeException("PROCESSING:该目标的评价总结正在生成中, 请稍后点击【查看总结】");
+            }
+            return doSummarizeInternal(targetTypeId, targetId, true);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("获取分布式锁被中断", e);
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    /**
+     * 总结内部逻辑
+     *
+     * @param full true=全量总结(忽略游标/旧总结), false=增量总结(只用游标之后的新评价)
+     */
+    private String doSummarizeInternal(Integer targetTypeId, Long targetId, boolean full) {
         // 1. 查询上次总结
         EvaluationSummary prev = summaryMapper.selectOne(
                 new LambdaQueryWrapper<EvaluationSummary>()
                         .eq(EvaluationSummary::getTargetTypeId, targetTypeId)
                         .eq(EvaluationSummary::getTargetId, targetId));
 
-        LocalDateTime afterTime = null;
-        String prevSummary = "";
-        if (prev != null && prev.getLastEvaluationTime() != null) {
+        // 全量模式: 忽略游标和旧总结; 增量模式: 使用游标
+        LocalDateTime afterTime;
+        String prevSummary;
+        if (full) {
+            afterTime = null;
+            prevSummary = "";
+            log.info("全量总结: targetTypeId={}, targetId={}", targetTypeId, targetId);
+        } else if (prev != null && prev.getLastEvaluationTime() != null) {
             afterTime = prev.getLastEvaluationTime();
             prevSummary = prev.getSummaryContent();
             log.info("增量总结: targetTypeId={}, targetId={}, 上次总结时间={}", targetTypeId, targetId, afterTime);
         } else {
+            afterTime = null;
+            prevSummary = "";
             log.info("首次总结: targetTypeId={}, targetId={}", targetTypeId, targetId);
         }
-
         // 2. 检查是否有新评价
         log.info("查询新评价: targetTypeId={}, targetId={}, afterTime={}", targetTypeId, targetId, afterTime);
         String newEvaluationsJson;
@@ -75,7 +138,7 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
         }
         log.info("评价查询返回: length={}, preview={}",
                 newEvaluationsJson != null ? newEvaluationsJson.length() : 0,
-                newEvaluationsJson != null ? newEvaluationsJson.substring(0, Math.min(200, newEvaluationsJson.length())) : "null");
+                newEvaluationsJson != null ? newEvaluationsJson.substring(0, Math.min(500, newEvaluationsJson.length())) : "null");
 
         @SuppressWarnings({"unchecked", "rawtypes"})
         List<Map<String, Object>> newEvals = (List) JSONUtil.toList(newEvaluationsJson, Map.class);
@@ -90,23 +153,20 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
         }
         log.info("发现 {} 条新评价: targetTypeId={}, targetId={}", newEvals.size(), targetTypeId, targetId);
 
-        // 3. 构建 prompt
+    // 3. 构建 prompt
         String targetLabel = targetTypeId == 7 ? "服务人员" : "服务项";
         String prompt;
         if (!prevSummary.isEmpty()) {
             prompt = String.format(
-                    "你是云岚到家平台的评价分析助手。请根据以下信息为%s(ID=%d)更新评价总结。\n" +
-                    "## 上次评价总结\n%s\n\n## 新增评价 (共%d条)\n%s\n\n" +
-                    "请将新增评价的内容与上次总结合并, 生成一份完整、结构化的评价总结。" +
-                    "总结应包括: 整体评价趋势、用户满意度、优点、待改进点、关键词标签。" +
-                    "如果新评价中包含具体服务人员名字, 请务必在总结中体现。",
-                    targetLabel, targetId, prevSummary, newEvals.size(), newEvaluationsJson);
+                    "你是家政平台的评价分析助手。请根据以下信息为%s(ID=%d)生成综合评价总结。\n" +
+                    "## 历史评价总结\n%s\n\n## 新增评价 (共%d条)\n%s\n\n" +
+                    "请将历史总结与新增评价融合，用一句话概括该%s的整体评价（80字以内，口语化，不要任何格式标记）。如果新旧评价有矛盾，应体现变化趋势。",
+                    targetLabel, targetId, prevSummary, newEvals.size(), newEvaluationsJson, targetLabel);
         } else {
             prompt = String.format(
-                    "你是云岚到家平台的评价分析助手。请根据以下评价内容为%s(ID=%d)生成评价总结。\n" +
+                    "你是家政平台的评价分析助手。请根据以下评价内容为%s(ID=%d)生成评价总结。\n" +
                     "## 评价列表 (共%d条)\n%s\n\n" +
-                    "请生成一份结构化的评价总结, 包括: 整体评价趋势、用户满意度、优点、待改进点、关键词标签。" +
-                    "如果评价中包含具体服务人员名字, 请务必在总结中体现。",
+                    "请用一句话概括这些评价的核心观点（50字以内，口语化，不要任何格式标记）。",
                     targetLabel, targetId, newEvals.size(), newEvaluationsJson);
         }
 
@@ -114,6 +174,9 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
         String sessionId = "eval-summary-" + UUID.randomUUID().toString().substring(0, 8);
         List<Map<String, String>> messages = List.of(
                 Map.of("role", "user", "content", prompt));
+        log.info("发送 AI 请求: sessionId={}, prompt 长度={}, prompt 末尾(300字符)={}",
+                sessionId, prompt.length(),
+                prompt.substring(Math.max(0, prompt.length() - 300)));
         try {
             CompletableFuture<String> future = wsClient.connectAndCollect(sessionId, messages);
             String summary = future.get(180, TimeUnit.SECONDS);

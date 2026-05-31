@@ -15,6 +15,15 @@ public interface EvaluationSummaryService {
     String summarize(Integer targetTypeId, Long targetId);
 
     /**
+     * 全量总结: 忽略历史游标, 基于所有评价重新生成完整总结
+     *
+     * @param targetTypeId 评价目标类型 (6=服务项, 7=服务人员)
+     * @param targetId     目标ID
+     * @return AI 生成的总结文本
+     */
+    String summarizeFull(Integer targetTypeId, Long targetId);
+
+    /**
      * 查询已有的评价总结
      *
      * @param targetTypeId 评价目标类型

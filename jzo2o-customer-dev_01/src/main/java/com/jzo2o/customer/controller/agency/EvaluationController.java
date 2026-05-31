@@ -43,7 +43,7 @@ public class EvaluationController {
     }
 
     @PostMapping("/summarize")
-    @ApiOperation("手动触发 AI 评价总结 (强制重新生成)")
+    @ApiOperation("手动触发 AI 评价总结 (增量)")
     @ApiImplicitParams({
             @ApiImplicitParam(name = "targetTypeId", value = "评价目标类型 (7=服务人员)", required = true, dataTypeClass = Integer.class),
             @ApiImplicitParam(name = "targetId", value = "目标ID", required = true, dataTypeClass = Long.class)
@@ -53,16 +53,25 @@ public class EvaluationController {
         return aiApi.summarizeEvaluation(targetTypeId, targetId);
     }
 
+    @PostMapping("/summarize/full")
+    @ApiOperation("手动触发 AI 评价总结 (全量, 忽略历史游标)")
+    @ApiImplicitParams({
+            @ApiImplicitParam(name = "targetTypeId", value = "评价目标类型 (7=服务人员)", required = true, dataTypeClass = Integer.class),
+            @ApiImplicitParam(name = "targetId", value = "目标ID", required = true, dataTypeClass = Long.class)
+    })
+    public Map<String, String> summarizeFull(@RequestParam("targetTypeId") Integer targetTypeId,
+                                              @RequestParam("targetId") Long targetId) {
+        return aiApi.summarizeEvaluationFull(targetTypeId, targetId);
+    }
+
     @GetMapping("/summarize")
-    @ApiOperation("查询/生成 AI 评价总结 (内部检测增量, 有新评价则合并生成, 无新评价则返回旧总结)")
+    @ApiOperation("查询已有 AI 评价总结 (纯查库, 不触发 AI)")
     @ApiImplicitParams({
             @ApiImplicitParam(name = "targetTypeId", value = "评价目标类型 (7=服务人员)", required = true, dataTypeClass = Integer.class),
             @ApiImplicitParam(name = "targetId", value = "目标ID", required = true, dataTypeClass = Long.class)
     })
     public Map<String, String> getSummary(@RequestParam("targetTypeId") Integer targetTypeId,
                                            @RequestParam("targetId") Long targetId) {
-        // 直接走增量总结逻辑: summarize() 内部会检测是否有新评价,
-        // 有则合并旧总结+新评价生成新总结, 无则返回旧总结
-        return aiApi.summarizeEvaluation(targetTypeId, targetId);
+        return aiApi.getEvaluationSummary(targetTypeId, targetId);
     }
 }

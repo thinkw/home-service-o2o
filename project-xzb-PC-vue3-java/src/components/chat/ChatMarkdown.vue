@@ -1,177 +1,180 @@
-<!-- Markdown 渲染组件 — cherry-markdown 纯预览渲染 -->
+<!-- Markdown 渲染组件 — 零依赖自包含解析 -->
 <template>
-  <div class="chat-markdown-wrapper">
-    <!-- Cherry 编辑器挂载点（隐藏） -->
-    <div ref="cherryMountRef" class="cherry-mount"></div>
-    <!-- 实际渲染内容 -->
-    <div class="chat-markdown" v-html="renderedHtml"></div>
-  </div>
+  <div class="chat-markdown" v-html="renderedHtml"></div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps<{
   content: string
 }>()
 
-const renderedHtml = ref('')
-const cherryMountRef = ref<HTMLDivElement>()
-let cherryInstance: any = null
+/**
+ * 轻量 Markdown → HTML 解析器
+ * 覆盖 AI 总结常用语法：标题/粗体/斜体/行内代码/代码块/列表/表格/引用/分割线/删除线
+ */
+function parseMd(md: string): string {
+  if (!md) return ''
 
-/** 初始化 Cherry 实例 */
-const initCherry = async () => {
-  if (!cherryMountRef.value) return
+  let html = md
 
-  try {
-    // 动态导入 cherry-markdown 主包 ESM
-    const Cherry = (await import('cherry-markdown')).default
+  // 0. XSS 防护：转义 HTML 标签（在 markdown 解析之前）
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 
-    // 在隐藏的 DOM 上初始化 Cherry，关闭工具栏和编辑区
-    cherryInstance = new Cherry({
-      el: cherryMountRef.value,
-      defaultToolbar: false,
-      isPreviewOnly: true,
-      engine: {
-        global: {
-          flowSessionContext: true,
-        },
-        syntax: {
-          mathBlock: {
-            engine: 'katex',
-            katexConfig: {
-              trust: true,
-              strict: false,
-              throwOnError: false,
-            },
-          },
-          inlineMath: {
-            engine: 'katex',
-            katexConfig: {
-              trust: true,
-              strict: false,
-              throwOnError: false,
-            },
-          },
-          codeBlock: {
-            wrap: false,
-            lineNumber: false,
-            copyCode: true,
-          },
-        },
-      },
+  // 1. 代码块 ```lang\n...\n```
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+    return `<pre><code>${code.trimEnd()}</code></pre>`
+  })
+
+  // 2. 行内代码 `code`
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>')
+
+  // 3. 标题 ## ~ ######
+  html = html.replace(/^######\s+(.+)$/gm, '<h6>$1</h6>')
+  html = html.replace(/^#####\s+(.+)$/gm, '<h5>$1</h5>')
+  html = html.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>')
+  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+  html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+
+  // 4. 引用块 > （支持多行）
+  html = html.replace(/^(?:>\s*.+)(?:\n>\s*.+)*/g, (block) => {
+    const lines = block.split('\n').map((l) => l.replace(/^>\s?/, ''))
+    return `<blockquote>${lines.join('<br>')}</blockquote>`
+  })
+
+  // 5. 分割线 --- 或 *** 或 ___
+  html = html.replace(/^(?:---|\*\*\*|___)\s*$/gm, '<hr>')
+
+  // 6. 无序列表 - 或 *
+  html = html.replace(/^[\s]*[-*]\s+(.+)$/gm, '<li>$1</li>')
+  // 将连续的 <li> 包裹为 <ul>
+  html = html.replace(/((?:<li>.*<\/li>(?:<br>)?)+)/g, '<ul>$1</ul>')
+
+  // 7. 有序列表 1.
+  html = html.replace(/^[\s]*\d+\.\s+(.+)$/gm, '<oli>$1</oli>')
+  html = html.replace(/((?:<oli>.*<\/oli>(?:<br>)?)+)/g, (_m, content) => {
+    return '<ol>' + content.replace(/<(\/?)oli>/g, '<$1li>') + '</ol>'
+  })
+
+  // 8. 表格 | ... |
+  const tableRegex = /^\|.+\|$\n(\|[-:\s|]+\|\n)?((?:\|.+\|$\n?)+)/gm
+  html = html.replace(tableRegex, (_match, _separatorRow, body) => {
+    const rows = body.trim().split('\n').filter(Boolean)
+    if (rows.length === 0) return _match
+
+    const parseCells = (row: string): string =>
+      row
+        .split('|')
+        .filter((c) => c.trim() !== '')
+        .map((c) => c.trim())
+        .map((c) => `<td>${c}</td>`)
+        .join('')
+
+    const trs = rows
+      .map((row, i) => {
+        const tag = i === 0 ? 'th' : 'td'
+        const cells = row
+          .split('|')
+          .filter((c) => c.trim() !== '')
+          .map((c) => c.trim())
+          .map((c) => `<${tag}>${c}</${tag}>`)
+          .join('')
+        return `<tr>${cells}</tr>`
+      })
+      .join('')
+
+    return `<table>${trs}</table>`
+  })
+
+  // 9. 粗体 **text**
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+
+  // 10. 斜体 *text*
+  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+
+  // 11. 删除线 ~~text~~
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>')
+
+  // 12. 段落处理：将连续的非标签文本包裹为 <p>
+  // 先按双换行分段
+  const segments = html.split(/\n{2,}/)
+  html = segments
+    .map((seg) => {
+      const trimmed = seg.trim()
+      if (!trimmed) return ''
+      // 已被块级元素包裹的不再包 <p>
+      if (/^<(h[1-6]|ul|ol|li|blockquote|pre|table|hr|div)/.test(trimmed)) {
+        return trimmed
+      }
+      // 单行内联内容包 <p>
+      return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`
     })
+    .join('\n')
 
-    // 使用引擎做纯 Markdown → HTML 转换
-    renderContent()
-  } catch (e: any) {
-    console.error('[ChatMarkdown] Cherry init error:', e?.message || e)
-    // 降级：直接显示原始内容
-    renderedHtml.value = props.content ? props.content.replace(/\n/g, '<br>') : ''
-  }
+  // 13. 清理多余空行
+  html = html.replace(/\n{3,}/g, '\n\n')
+
+  return html.trim()
 }
 
-/** 渲染当前内容 */
-const renderContent = () => {
-  if (!cherryInstance) {
-    renderedHtml.value = props.content || ''
-    return
-  }
-  if (!props.content) {
-    renderedHtml.value = ''
-    return
-  }
-  try {
-    // 使用 engine.makeHtml() 做纯渲染
-    renderedHtml.value = cherryInstance.engine.makeHtml(props.content)
-  } catch (e: any) {
-    console.error('[ChatMarkdown] makeHtml error:', e?.message || e)
-    renderedHtml.value = props.content.replace(/\n/g, '<br>')
-  }
-}
-
-onMounted(() => {
-  initCherry()
-})
-
-watch(() => props.content, () => {
-  renderContent()
-})
-
-onBeforeUnmount(() => {
-  if (cherryInstance) {
-    cherryInstance.destroy()
-    cherryInstance = null
-  }
-})
+const renderedHtml = computed(() => parseMd(props.content))
 </script>
 
 <style lang="less">
-.chat-markdown-wrapper {
-  position: relative;
-}
-
-/* 隐藏 Cherry 编辑器自身产生的所有 DOM（工具栏、编辑区、预览区等） */
-.cherry-mount {
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-  pointer-events: none;
-  opacity: 0;
-
-  // 确保内部所有子元素都不可见
-  * {
-    display: none !important;
-  }
-}
-
 .chat-markdown {
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.75;
   word-break: break-word;
   overflow-wrap: break-word;
   color: #333;
 
-  img {
-    max-width: 100%;
-    border-radius: 4px;
-    margin: 8px 0;
+  h1, h2, h3, h4, h5, h6 {
+    margin-top: 16px;
+    margin-bottom: 8px;
+    line-height: 1.4;
+    font-weight: 600;
+
+    &:first-child { margin-top: 0; }
+  }
+  h1 { font-size: 22px; border-bottom: 1px solid #e8e8e8; padding-bottom: 8px; }
+  h2 { font-size: 19px; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+  h3 { font-size: 17px; }
+  h4 { font-size: 16px; }
+  h5 { font-size: 15px; }
+  h6 { font-size: 14px; color: #666; }
+
+  p { margin: 8px 0; }
+
+  strong { font-weight: 600; color: #1a1a1a; }
+  em { font-style: italic; }
+
+  code {
+    background: rgba(175, 184, 193, 0.2);
+    border-radius: 3px;
+    padding: 2px 5px;
+    font-size: 13px;
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    color: #e34d59;
   }
 
   pre {
     background: #f6f8fa;
-    border-radius: 4px;
-    padding: 12px;
+    border-radius: 6px;
+    padding: 12px 16px;
     overflow-x: auto;
-  }
-
-  code {
-    background: #f0f0f0;
-    border-radius: 3px;
-    padding: 2px 5px;
-    font-size: 13px;
-  }
-
-  pre code {
-    background: none;
-    padding: 0;
-  }
-
-  table {
-    border-collapse: collapse;
-    width: 100%;
     margin: 10px 0;
+    border: 1px solid #e8e8e8;
 
-    th, td {
-      border: 1px solid #e8e8e8;
-      padding: 8px 12px;
-      text-align: left;
-    }
-
-    th {
-      background: #fafafa;
-      font-weight: 600;
+    code {
+      background: none;
+      padding: 0;
+      color: #24292f;
+      font-size: 13px;
     }
   }
 
@@ -179,29 +182,59 @@ onBeforeUnmount(() => {
     border-left: 4px solid #d9d9d9;
     padding: 8px 16px;
     margin: 10px 0;
-    color: #666;
+    color: #555;
     background: #fafafa;
+    border-radius: 0 4px 4px 0;
   }
 
-  h1, h2, h3, h4, h5, h6 {
-    margin-top: 16px;
-    margin-bottom: 8px;
-    line-height: 1.4;
-    font-weight: 600;
+  ul, ol {
+    padding-left: 22px;
+    margin: 8px 0;
+
+    ul, ol { margin: 4px 0; }
+  }
+  ul { list-style-type: disc; }
+  ol { list-style-type: decimal; }
+
+  li {
+    margin: 4px 0;
+    line-height: 1.65;
   }
 
-  p { margin: 8px 0; }
+  table {
+    border-collapse: collapse;
+    max-width: 100%;
+    margin: 10px 0;
+    display: table; /* 修复: display:block 会摧毁表格布局,导致竖线消失 */
 
-  ul, ol { padding-left: 20px; margin: 8px 0; }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px 12px;
+      text-align: left;
+      white-space: nowrap;
+    }
 
-  li { margin: 4px 0; }
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+      font-size: 13px;
+    }
 
-  strong { font-weight: 600; }
+    td { font-size: 13px; }
 
-  a {
-    color: #0066cc;
-    text-decoration: none;
-    &:hover { text-decoration: underline; }
+    tr:nth-child(even) td { background: #fafafa; }
   }
+
+  hr {
+    border: none;
+    border-top: 1px solid #e8e8e8;
+    margin: 16px 0;
+  }
+
+  a { color: #0066cc; text-decoration: none; &:hover { text-decoration: underline; } }
+
+  img { max-width: 100%; border-radius: 4px; margin: 8px 0; }
+
+  del { color: #999; text-decoration: line-through; }
 }
 </style>

@@ -1,8 +1,7 @@
 package com.jzo2o.ai.client;
 
 import cn.hutool.json.JSONUtil;
-import com.jzo2o.ai.mapper.EvaluationSummaryMapper;
-import com.jzo2o.ai.model.domain.EvaluationSummary;
+import com.jzo2o.ai.service.EvaluationSummaryService;
 import com.jzo2o.api.customer.EvaluationApi;
 import com.jzo2o.api.orders.OrdersApi;
 import com.jzo2o.api.orders.OrdersServeApi;
@@ -32,7 +31,7 @@ public class ToolExecutor {
     private EvaluationApi evaluationApi;
 
     @Resource
-    private EvaluationSummaryMapper evaluationSummaryMapper;
+    private EvaluationSummaryService evaluationSummaryService;
 
     /**
      * 执行指定工具, 返回 JSON 字符串结果给 Python Agent
@@ -64,28 +63,21 @@ public class ToolExecutor {
                 }
             }
             case "get_evaluation_summary": {
-                // 读取上次 AI 总结内容 (evaluation_summary 表)
+                // 纯查询: 读取已有的 AI 评价总结 (仅查 evaluation_summary 表, 不触发 AI 生成)
                 Integer targetTypeId = toInt(args.get("target_type_id"));
                 Long targetId = toLong(args.get("target_id"));
                 if (targetTypeId == null || targetId == null) {
                     return toError("缺少参数 target_type_id 或 target_id");
                 }
-                EvaluationSummary summary = evaluationSummaryMapper.selectOne(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<EvaluationSummary>()
-                                .eq(EvaluationSummary::getTargetTypeId, targetTypeId)
-                                .eq(EvaluationSummary::getTargetId, targetId)
-                );
-                if (summary == null) {
+                String summary = evaluationSummaryService.getSummary(targetTypeId, targetId);
+                if (summary == null || summary.isEmpty()) {
                     return safeToJson(Map.of(
                             "has_previous", false,
-                            "summary", "",
-                            "last_evaluation_time", ""));
+                            "summary", ""));
                 }
                 return safeToJson(Map.of(
                         "has_previous", true,
-                        "summary", summary.getSummaryContent() != null ? summary.getSummaryContent() : "",
-                        "last_evaluation_time", summary.getLastEvaluationTime() != null
-                                ? summary.getLastEvaluationTime().toString() : ""));
+                        "summary", summary));
             }
             case "query_evaluations": {
                 // 查询指定目标的新增评价 (Feign → jzo2o-customer)

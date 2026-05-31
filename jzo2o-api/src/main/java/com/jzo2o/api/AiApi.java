@@ -25,6 +25,13 @@ public interface AiApi {
                                             @RequestParam("targetId") Long targetId);
 
     /**
+     * 触发 AI 评价总结 (全量模式, 忽略历史游标)
+     */
+    @PostMapping("/evaluation/summarize/full")
+    Map<String, String> summarizeEvaluationFull(@RequestParam("targetTypeId") Integer targetTypeId,
+                                                 @RequestParam("targetId") Long targetId);
+
+    /**
      * 查询已有的 AI 评价总结
      *
      * @return { "summary": "总结文本" }

@@ -110,7 +110,11 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                     await send_queue.put({"type": "heartbeat"})
 
         try:
-            agent = build_graph(tool_ctx, checkpointer)
+            # 评估总结等一次性无状态会话不走 checkpointer (避免 SQLite 锁导致 agent 挂起)
+            use_checkpointer = not session_id.startswith("eval-summary-")
+            agent_checkpointer = checkpointer if use_checkpointer else None
+            logger.info("session_id=%s, use_checkpointer=%s", session_id, use_checkpointer)
+            agent = build_graph(tool_ctx, agent_checkpointer)
             langchain_messages = _dicts_to_messages(messages_list)
             config = {"configurable": {"thread_id": session_id}}
 

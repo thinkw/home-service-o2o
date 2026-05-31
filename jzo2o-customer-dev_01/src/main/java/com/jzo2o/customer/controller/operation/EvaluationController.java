@@ -50,7 +50,7 @@ public class EvaluationController {
     }
 
     @PostMapping("/summarize")
-    @ApiOperation("手动触发 AI 评价总结 (异步)")
+    @ApiOperation("手动触发 AI 评价总结 (增量)")
     @ApiImplicitParams({
             @ApiImplicitParam(name = "targetTypeId", value = "评价目标类型 (7=服务人员)", required = true, dataTypeClass = Integer.class),
             @ApiImplicitParam(name = "targetId", value = "目标ID", required = true, dataTypeClass = Long.class)
@@ -58,5 +58,16 @@ public class EvaluationController {
     public Map<String, String> summarize(@RequestParam("targetTypeId") Integer targetTypeId,
                                          @RequestParam("targetId") Long targetId) {
         return aiApi.summarizeEvaluation(targetTypeId, targetId);
+    }
+
+    @PostMapping("/summarize/full")
+    @ApiOperation("手动触发 AI 评价总结 (全量, 忽略历史游标)")
+    @ApiImplicitParams({
+            @ApiImplicitParam(name = "targetTypeId", value = "评价目标类型 (7=服务人员)", required = true, dataTypeClass = Integer.class),
+            @ApiImplicitParam(name = "targetId", value = "目标ID", required = true, dataTypeClass = Long.class)
+    })
+    public Map<String, String> summarizeFull(@RequestParam("targetTypeId") Integer targetTypeId,
+                                              @RequestParam("targetId") Long targetId) {
+        return aiApi.summarizeEvaluationFull(targetTypeId, targetId);
     }
 }
