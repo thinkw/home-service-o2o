@@ -40,4 +40,10 @@ public class ApplicationProperties {
     @NestedConfigurationProperty
     private List<String> accessPathBlackList = new ArrayList<>();
 
+    /**
+     * 访问路径前缀黑名单（startsWith 匹配，用于拦截 inner 路由等）
+     */
+    @NestedConfigurationProperty
+    private List<String> accessPathBlockPrefixList = new ArrayList<>();
+
 }

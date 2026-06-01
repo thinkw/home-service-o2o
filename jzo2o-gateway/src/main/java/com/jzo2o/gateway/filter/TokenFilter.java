@@ -52,6 +52,14 @@ public class TokenFilter implements GatewayFilter {
                     HttpStatus.FORBIDDEN.value(),
                     ErrorInfo.Msg.REQUEST_FORBIDDEN);
         }
+        // 1.1.1.前缀黑名单校验
+        for (String blockPrefix : applicationProperties.getAccessPathBlockPrefixList()) {
+            if (uri.startsWith(blockPrefix)) {
+                return GatewayWebUtils.toResponse(exchange,
+                        HttpStatus.FORBIDDEN.value(),
+                        ErrorInfo.Msg.REQUEST_FORBIDDEN);
+            }
+        }
         // 1.2.访问白名单
         if (applicationProperties.getAccessPathWhiteList().contains(uri)) {
             return chain.filter(exchange);

@@ -106,6 +106,13 @@ logging:
   level:
     com.jzo2o: debug
 jzo2o:
+  # 前缀黑名单：拦截所有 inner 内部路由，防止通过网关对外暴露
+  access-path-block-prefix-list:
+    - /ai/inner/
+    - /customer/inner/
+    - /foundations/inner/
+    - /publics/inner/
+    - /orders-manager/inner/
   access-path-white-list:
     - /foundations/open/login
     - /customer/open/login/worker
