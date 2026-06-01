@@ -1,4 +1,5 @@
 """Agent 图构建 — StateGraph 编排 LLM 调用和工具执行"""
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -76,8 +77,24 @@ def build_graph(tool_ctx: ToolExecutionContext,
 
     async def call_model(state: AgentState) -> dict:
         """调用 LLM, 返回 AIMessage (可能包含 tool_calls)"""
-        response = await llm_with_tools.ainvoke(state["messages"])
-        return {"messages": [response]}
+        try:
+            response = await llm_with_tools.ainvoke(state["messages"])
+            # 优先从 usage_metadata 获取 (LangChain 标准字段),
+            # 回退到 response_metadata.token_usage (旧版兼容)
+            usage = getattr(response, "usage_metadata", None) or {}
+            if not usage:
+                usage = response.response_metadata.get("token_usage", {}) or {}
+            if usage:
+                logger.info(
+                    "Agent LLM usage: prompt_tokens=%s, completion_tokens=%s, total_tokens=%s",
+                    usage.get("input_tokens") or usage.get("prompt_tokens"),
+                    usage.get("output_tokens") or usage.get("completion_tokens"),
+                    usage.get("total_tokens"),
+                )
+            return {"messages": [response]}
+        except asyncio.CancelledError:
+            logger.info("Agent LLM 调用在节点内被取消 (session 已断开)")
+            raise
 
     async def tool_executor(state: AgentState) -> dict:
         """执行工具: 本地工具直接调用, 远程工具通过 WebSocket 发给 Java"""

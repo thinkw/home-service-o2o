@@ -122,6 +122,7 @@ async def ws_chat(websocket: WebSocket, session_id: str):
             heartbeat_task = asyncio.create_task(heartbeat())
 
             buffer = ""
+            last_chunk_usage = None  # 跟踪流式 chunk 中的 token usage
             async for chunk, _metadata in agent.astream(
                 {"messages": langchain_messages},
                 config=config,
@@ -133,29 +134,46 @@ async def ws_chat(websocket: WebSocket, session_id: str):
 
                 # 仅处理 LLM 产出的 token 块
                 from langchain_core.messages import AIMessageChunk
-                if isinstance(chunk, AIMessageChunk) and chunk.content:
-                    token = chunk.content
-                    # 按换行缓冲, 与旧版 HTTP 行解码器行为一致
-                    if "\n" in token:
-                        parts = token.split("\n")
-                        for i, part in enumerate(parts):
-                            if i > 0:
-                                # 发送已完成的行
-                                await send_queue.put({
-                                    "type": "token",
-                                    "content": buffer,
-                                })
-                                buffer = part
-                            else:
-                                buffer += part
-                    else:
-                        buffer += token
+                if isinstance(chunk, AIMessageChunk):
+                    # 跟踪 usage 元数据 (stream_options include_usage 时出现在最后一个 chunk)
+                    _chunk_usage = getattr(chunk, "usage_metadata", None)
+                    if not _chunk_usage:
+                        _chunk_usage = chunk.response_metadata.get("token_usage", None) if chunk.response_metadata else None
+                    if _chunk_usage:
+                        last_chunk_usage = _chunk_usage
+
+                    if chunk.content:
+                        token = chunk.content
+                        # 按换行缓冲, 与旧版 HTTP 行解码器行为一致
+                        if "\n" in token:
+                            parts = token.split("\n")
+                            for i, part in enumerate(parts):
+                                if i > 0:
+                                    # 发送已完成的行
+                                    await send_queue.put({
+                                        "type": "token",
+                                        "content": buffer,
+                                    })
+                                    buffer = part
+                                else:
+                                    buffer += part
+                        else:
+                            buffer += token
                 # tool_call / tool_result 由 graph 节点内部的 tool_ctx 处理,
                 # 这里不需要额外干预
 
             # 取消心跳
             if heartbeat_task and not heartbeat_task.done():
                 heartbeat_task.cancel()
+
+            # 记录 token usage (从流式 chunk 中提取, 优先于 call_model 节点内的日志)
+            if last_chunk_usage:
+                logger.info(
+                    "Agent LLM usage (stream): prompt_tokens=%s, completion_tokens=%s, total_tokens=%s",
+                    last_chunk_usage.get("input_tokens") or last_chunk_usage.get("prompt_tokens"),
+                    last_chunk_usage.get("output_tokens") or last_chunk_usage.get("completion_tokens"),
+                    last_chunk_usage.get("total_tokens"),
+                )
 
             # 发送最后一行
             if buffer and not cancel_event.is_set():

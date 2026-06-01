@@ -5,6 +5,7 @@ DeepSeek 思考模式兼容:
   - _convert_message_to_dict         ❌ 出站: 不序列化 additional_kwargs.reasoning_content
   这里 monkey-patch 出站方向, 确保工具调用往返不丢失 reasoning_content。
 """
+import logging
 from typing import AsyncIterator, Dict, List, Mapping, Any
 from openai import AsyncOpenAI
 from langchain_core.messages import AIMessage, BaseMessage
@@ -51,8 +52,17 @@ async def stream_chat(messages: List[Dict[str, str]]) -> AsyncIterator[str]:
         model=settings.llm_model,
         messages=messages,
         stream=True,
+        stream_options={"include_usage": True},
     )
     async for chunk in response:
+        # 流式模式下 usage 只出现在最后一个 chunk 中
+        if chunk.usage:
+            logging.getLogger(__name__).info(
+                "LLM usage: prompt_tokens=%d, completion_tokens=%d, total_tokens=%d",
+                chunk.usage.prompt_tokens,
+                chunk.usage.completion_tokens,
+                chunk.usage.total_tokens,
+            )
         delta = chunk.choices[0].delta
         if delta.content:
             yield delta.content
@@ -79,4 +89,5 @@ def create_llm(**kwargs) -> ChatDeepSeek:
         temperature=kwargs.get("temperature", settings.llm_temperature),
         max_tokens=kwargs.get("max_tokens", settings.llm_max_tokens),
         streaming=True,
+        model_kwargs={"stream_options": {"include_usage": True}},
     )
