@@ -160,13 +160,13 @@ public class EvaluationSummaryServiceImpl implements EvaluationSummaryService {
             prompt = String.format(
                     "你是家政平台的评价分析助手。请根据以下信息为%s(ID=%d)生成综合评价总结。\n" +
                     "## 历史评价总结\n%s\n\n## 新增评价 (共%d条)\n%s\n\n" +
-                    "请将历史总结与新增评价融合，用一句话概括该%s的整体评价（80字以内，口语化，不要任何格式标记）。如果新旧评价有矛盾，应体现变化趋势。",
+                    "请将历史总结与新增评价融合，用一句话概括该%s的整体评价（80字以内，口语化，不要任何格式标记）。如果新旧评价有矛盾，应体现变化趋势。仅包括评价总结内容，不要给出额外输出",
                     targetLabel, targetId, prevSummary, newEvals.size(), newEvaluationsJson, targetLabel);
         } else {
             prompt = String.format(
                     "你是家政平台的评价分析助手。请根据以下评价内容为%s(ID=%d)生成评价总结。\n" +
                     "## 评价列表 (共%d条)\n%s\n\n" +
-                    "请用一句话概括这些评价的核心观点（50字以内，口语化，不要任何格式标记）。",
+                    "请用一句话概括这些评价的核心观点（50字以内，口语化，不要任何格式标记）。仅包括评价总结内容，不要给出额外输出",
                     targetLabel, targetId, newEvals.size(), newEvaluationsJson);
         }
 
