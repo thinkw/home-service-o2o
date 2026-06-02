@@ -7,6 +7,7 @@ import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiImplicitParam;
 import io.swagger.annotations.ApiImplicitParams;
 import io.swagger.annotations.ApiOperation;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -17,6 +18,7 @@ import java.util.Map;
  *
  * @author itcast
  **/
+@Slf4j
 @RestController("agencyEvaluationController")
 @RequestMapping("/agency/evaluation")
 @Api(tags = "机构端 - 评价相关接口")
@@ -50,7 +52,14 @@ public class EvaluationController {
     })
     public Map<String, String> summarize(@RequestParam("targetTypeId") Integer targetTypeId,
                                          @RequestParam("targetId") Long targetId) {
-        return aiApi.summarizeEvaluation(targetTypeId, targetId);
+        try {
+            return aiApi.summarizeEvaluation(targetTypeId, targetId);
+        } catch (Exception e) {
+            log.error("调用 AI 增量总结服务失败: targetTypeId={}, targetId={}", targetTypeId, targetId, e);
+            return Map.of("summary", "",
+                           "status", "ERROR",
+                           "msg", "AI总结服务暂不可用，请稍后重试");
+        }
     }
 
     @PostMapping("/summarize/full")
@@ -61,7 +70,14 @@ public class EvaluationController {
     })
     public Map<String, String> summarizeFull(@RequestParam("targetTypeId") Integer targetTypeId,
                                               @RequestParam("targetId") Long targetId) {
-        return aiApi.summarizeEvaluationFull(targetTypeId, targetId);
+        try {
+            return aiApi.summarizeEvaluationFull(targetTypeId, targetId);
+        } catch (Exception e) {
+            log.error("调用 AI 全量总结服务失败: targetTypeId={}, targetId={}", targetTypeId, targetId, e);
+            return Map.of("summary", "",
+                           "status", "ERROR",
+                           "msg", "AI总结服务暂不可用，请稍后重试");
+        }
     }
 
     @GetMapping("/summarize")
@@ -72,6 +88,13 @@ public class EvaluationController {
     })
     public Map<String, String> getSummary(@RequestParam("targetTypeId") Integer targetTypeId,
                                            @RequestParam("targetId") Long targetId) {
-        return aiApi.getEvaluationSummary(targetTypeId, targetId);
+        try {
+            return aiApi.getEvaluationSummary(targetTypeId, targetId);
+        } catch (Exception e) {
+            log.error("查询 AI 总结失败: targetTypeId={}, targetId={}", targetTypeId, targetId, e);
+            return Map.of("summary", "",
+                           "status", "ERROR",
+                           "msg", "AI总结服务暂不可用，请稍后重试");
+        }
     }
 }

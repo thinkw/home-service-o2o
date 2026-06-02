@@ -272,12 +272,32 @@ const handleClickSummary = async (row) => {
 
   try {
     const res = await getEvaluationSummary(7, row.targetId)
-    if (res && res.data && res.data.summary) {
-      summaryContent.value = res.data.summary
+    // 兼容两种返回格式:
+    // 1. PackResultFilter 包装: { code: 200, data: { summary, status } }
+    // 2. Feign 异常透传:    { code: 500, msg: "..." } (AxiosResponse 层)
+    const payload = res?.data
+    if (!payload) {
+      summaryError.value = '查询总结服务暂不可用，请稍后重试'
+      return
     }
-    // 无返回数据不报错，由 UI 显示「暂无总结」
+
+    // Feign 异常透传: code !== 200
+    if (payload.code && payload.code !== 200) {
+      summaryError.value = payload.msg || '查询总结服务暂不可用，请稍后重试'
+      return
+    }
+
+    // 正常响应
+    if (payload.summary) {
+      summaryContent.value = payload.summary
+    } else if (payload.status === 'EMPTY') {
+      // 后台明确返回无数据 → 引导用户生成
+      summaryError.value = '暂无评价总结，可点击下方【增量总结】或【全量总结】生成'
+    }
+    // 其他情况: summary 为空且无明确状态 → UI 兜底显示「暂无总结数据」
   } catch (err) {
-    // GET 失败不弹 error，由 UI 显示「暂无总结」，用户可主动点刷新
+    // 网络/超时等异常
+    summaryError.value = '查询总结服务暂不可用，请稍后重试'
     console.error('查询 AI 总结失败:', err)
   } finally {
     summaryLoading.value = false
@@ -298,20 +318,44 @@ const handleRefreshSummary = async () => {
 
   try {
     const res = await refreshEvaluationSummary(7, row.targetId)
-    if (res && res.data) {
-      if (res.data.status === 'SUCCESS' && res.data.summary) {
-        summaryContent.value = res.data.summary
-        MessagePlugin.success('增量总结已更新')
-      } else if (res.data.status === 'PROCESSING') {
-        summaryProcessing.value = true
-        MessagePlugin.info(res.data.msg || '正在生成中, 请稍后查看')
-      } else if (res.data.summary) {
-        summaryContent.value = res.data.summary
-      }
+    // 兼容两种返回格式:
+    // 1. PackResultFilter 包装: { code: 200, data: { summary, status } }
+    // 2. Feign 异常透传:    { code: 500, msg: "..." } (AxiosResponse 层)
+    const payload = res?.data
+    if (!payload) {
+      summaryError.value = 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error('AI总结服务暂不可用')
+      return
+    }
+
+    // Feign 异常透传: code !== 200
+    if (payload.code && payload.code !== 200) {
+      summaryError.value = payload.msg || 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error(summaryError.value)
+      return
+    }
+
+    // 正常响应
+    if (payload.status === 'SUCCESS' && payload.summary) {
+      summaryContent.value = payload.summary
+      MessagePlugin.success('增量总结已更新')
+    } else if (payload.status === 'PROCESSING') {
+      summaryProcessing.value = true
+      MessagePlugin.info(payload.msg || '正在生成中, 请稍后查看')
+    } else if (payload.status === 'ERROR') {
+      summaryError.value = payload.msg || 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error(summaryError.value)
+    } else if (payload.summary) {
+      // 兜底: 有 summary 但没有明确 status
+      summaryContent.value = payload.summary
+    } else {
+      summaryError.value = '增量总结失败，请稍后重试'
+      MessagePlugin.error(summaryError.value)
     }
   } catch (err) {
-    const msg = err?.response?.data?.msg || err?.message || String(err)
-    summaryError.value = msg
+    // 网络超时 (180s) 或 fetch 失败
+    summaryError.value = 'AI总结服务暂不可用，请稍后重试'
+    MessagePlugin.error(summaryError.value)
   } finally {
     summaryRefreshing.value = false
   }
@@ -331,20 +375,44 @@ const handleFullSummary = async () => {
 
   try {
     const res = await summarizeEvaluationFull(7, row.targetId)
-    if (res && res.data) {
-      if (res.data.status === 'SUCCESS' && res.data.summary) {
-        summaryContent.value = res.data.summary
-        MessagePlugin.success('全量总结已更新')
-      } else if (res.data.status === 'PROCESSING') {
-        summaryProcessing.value = true
-        MessagePlugin.info(res.data.msg || '正在生成中, 请稍后查看')
-      } else if (res.data.summary) {
-        summaryContent.value = res.data.summary
-      }
+    // 兼容两种返回格式:
+    // 1. PackResultFilter 包装: { code: 200, data: { summary, status } }
+    // 2. Feign 异常透传:    { code: 500, msg: "..." } (AxiosResponse 层)
+    const payload = res?.data
+    if (!payload) {
+      summaryError.value = 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error('AI总结服务暂不可用')
+      return
+    }
+
+    // Feign 异常透传: code !== 200
+    if (payload.code && payload.code !== 200) {
+      summaryError.value = payload.msg || 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error(summaryError.value)
+      return
+    }
+
+    // 正常响应
+    if (payload.status === 'SUCCESS' && payload.summary) {
+      summaryContent.value = payload.summary
+      MessagePlugin.success('全量总结已更新')
+    } else if (payload.status === 'PROCESSING') {
+      summaryProcessing.value = true
+      MessagePlugin.info(payload.msg || '正在生成中, 请稍后查看')
+    } else if (payload.status === 'ERROR') {
+      summaryError.value = payload.msg || 'AI总结服务暂不可用，请稍后重试'
+      MessagePlugin.error(summaryError.value)
+    } else if (payload.summary) {
+      // 兜底: 有 summary 但没有明确 status
+      summaryContent.value = payload.summary
+    } else {
+      summaryError.value = '全量总结失败，请稍后重试'
+      MessagePlugin.error(summaryError.value)
     }
   } catch (err) {
-    const msg = err?.response?.data?.msg || err?.message || String(err)
-    summaryError.value = msg
+    // 网络超时 (180s) 或 fetch 失败
+    summaryError.value = 'AI总结服务暂不可用，请稍后重试'
+    MessagePlugin.error(summaryError.value)
   } finally {
     summaryFullLoading.value = false
   }
