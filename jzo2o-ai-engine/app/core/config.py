@@ -28,6 +28,10 @@ class Settings:
     checkpoint_db_path: str = os.getenv("CHECKPOINT_DB_PATH",
                                          "data/checkpoints.db")
 
+    # Milvus 向量数据库 (Docker Standalone)
+    milvus_uri: str = os.getenv("MILVUS_URI", "http://localhost:19530")
+    milvus_token: str = os.getenv("MILVUS_TOKEN", "")
+
     # 服务配置
     server_host: str = os.getenv("SERVER_HOST", "0.0.0.0")
     server_port: int = int(os.getenv("SERVER_PORT", "8000"))

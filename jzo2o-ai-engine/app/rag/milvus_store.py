@@ -1,8 +1,7 @@
-"""Milvus Lite 向量存储 — collection 管理、chunk CRUD、向量检索"""
+"""Milvus 向量存储 — collection 管理、chunk CRUD、向量检索（Docker Standalone）"""
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Optional
 
 from pymilvus import (
@@ -25,16 +24,16 @@ _client: Optional[MilvusClient] = None
 
 
 def _get_client() -> MilvusClient:
-    """获取 Milvus Lite 客户端 (惰性初始化)"""
+    """获取 Milvus 客户端 (惰性初始化, 连接 Docker Standalone)"""
     global _client
     if _client is not None:
         return _client
 
-    db_path = settings.checkpoint_db_path.rsplit("/", 1)[0] + "/milvus_knowledge.db"
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    uri = settings.milvus_uri
+    token = settings.milvus_token or None
 
-    logger.info("初始化 Milvus Lite, db_path=%s", db_path)
-    _client = MilvusClient(db_path)
+    logger.info("连接 Milvus Standalone, uri=%s", uri)
+    _client = MilvusClient(uri=uri, token=token)
     _init_collection()
     return _client
 
